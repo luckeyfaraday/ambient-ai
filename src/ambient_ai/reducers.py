@@ -24,23 +24,28 @@ def reduce_context(paths: AmbientPaths, limit: int = 100) -> dict[str, object]:
         unique[key] = row
 
     items = list(unique.values())
+    refs = [
+        {
+            "id": row["id"],
+            "source": row["source"],
+            "kind": row["kind"],
+            "title": row["title"],
+            "url": row["url"],
+            "artifact_ref": row["artifact_ref"],
+            "occurred_at": row["occurred_at"],
+        }
+        for row in items
+    ]
+    by_source: dict[str, list[dict[str, object]]] = {}
+    for ref in refs:
+        by_source.setdefault(ref["source"], []).append(ref)
     hot = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "event_count": len(rows),
         "unique_event_count": len(items),
         "duplicate_count": duplicate_count,
-        "recent_refs": [
-            {
-                "id": row["id"],
-                "source": row["source"],
-                "kind": row["kind"],
-                "title": row["title"],
-                "url": row["url"],
-                "artifact_ref": row["artifact_ref"],
-                "occurred_at": row["occurred_at"],
-            }
-            for row in items[:25]
-        ],
+        "by_source": by_source,
+        "recent_refs": refs,
     }
 
     (paths.context_dir / "hot.json").write_text(json.dumps(hot, indent=2), encoding="utf-8")
@@ -56,17 +61,23 @@ def render_recent_md(hot: dict[str, object]) -> str:
         f"Generated: {hot['generated_at']}",
         f"Events: {hot['event_count']} total, {hot['unique_event_count']} unique, {hot['duplicate_count']} duplicates collapsed",
         "",
-        "## Recent References",
-        "",
     ]
-    for ref in hot["recent_refs"]:
-        line = f"- [{ref['source']}/{ref['kind']}] {ref['title']}"
-        if ref["url"]:
-            line += f" <{ref['url']}>"
-        if ref["artifact_ref"]:
-            line += f" (artifact: `{ref['artifact_ref']}`)"
-        lines.append(line)
-    lines.append("")
+    by_source = hot.get("by_source", {})
+    if by_source:
+        for source, refs in by_source.items():
+            lines.append(f"## {source} ({len(refs)})")
+            lines.append("")
+            for ref in refs:
+                line = f"- [{ref['kind']}] {ref['title']}"
+                if ref["url"]:
+                    line += f" <{ref['url']}>"
+                if ref["artifact_ref"]:
+                    line += f" (artifact: `{ref['artifact_ref']}`)"
+                lines.append(line)
+            lines.append("")
+    else:
+        lines.append("No events.")
+        lines.append("")
     return "\n".join(lines)
 
 

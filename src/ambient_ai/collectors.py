@@ -22,7 +22,7 @@ _SKIP_SCHEMES = ("about:", "moz-extension:", "chrome:", "chrome-extension:", "fi
 class BrowserCollector(Collector):
     source = "browser"
 
-    def __init__(self, since_minutes: int = 10):
+    def __init__(self, since_minutes: int = 60):
         self.since_minutes = since_minutes
 
     def collect(self) -> list[AmbientEvent]:

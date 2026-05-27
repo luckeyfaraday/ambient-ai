@@ -3,6 +3,30 @@
   "event_count": 4,
   "unique_event_count": 4,
   "duplicate_count": 0,
+  "by_source": {
+    "video": [
+      {
+        "id": 1,
+        "source": "video",
+        "kind": "youtube_watch",
+        "title": "Open model X: local inference and hardware requirements",
+        "url": "https://www.youtube.com/watch?v=example-model-x",
+        "artifact_ref": "artifacts/transcripts/example-model-x.txt",
+        "occurred_at": "2026-05-27T00:00:00+00:00"
+      }
+    ],
+    "browser": [
+      {
+        "id": 2,
+        "source": "browser",
+        "kind": "tab",
+        "title": "Model X GitHub repository",
+        "url": "https://github.com/example/model-x",
+        "artifact_ref": null,
+        "occurred_at": "2026-05-27T00:00:00+00:00"
+      }
+    ]
+  },
   "recent_refs": [
     {
       "id": 2,
