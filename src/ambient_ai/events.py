@@ -53,13 +53,13 @@ class EventStore:
                     url TEXT,
                     artifact_ref TEXT,
                     metadata_json TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL UNIQUE,
+                    fingerprint TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_occurred_at ON events(occurred_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_events_fingerprint ON events(fingerprint)")
+            self._ensure_unique_fingerprints(conn)
 
     def add_event(self, event: AmbientEvent) -> int | None:
         normalized = event.normalized()
@@ -101,6 +101,20 @@ class EventStore:
             return int(cursor.lastrowid)
         return None
 
+    def _ensure_unique_fingerprints(self, conn: sqlite3.Connection) -> None:
+        conn.execute("DROP INDEX IF EXISTS idx_events_fingerprint")
+        conn.execute(
+            """
+            DELETE FROM events
+            WHERE id NOT IN (
+                SELECT MAX(id)
+                FROM events
+                GROUP BY fingerprint
+            )
+            """
+        )
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_events_fingerprint ON events(fingerprint)")
+
     def recent(self, limit: int = 100) -> list[sqlite3.Row]:
         with self.connect() as conn:
             return list(
@@ -114,4 +128,3 @@ class EventStore:
 def make_fingerprint(event: AmbientEvent) -> str:
     key = "|".join([event.source, event.kind, event.title.lower(), event.url or ""])
     return key[:512]
-
