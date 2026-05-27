@@ -1,0 +1,34 @@
+{
+  "generated_at": "2026-05-27T00:00:00+00:00",
+  "event_count": 4,
+  "unique_event_count": 4,
+  "duplicate_count": 0,
+  "candidate_threads": [
+    {
+      "id": "local-model-viability",
+      "summary": "Recent activity suggests the user may be evaluating an open-source model for local use.",
+      "evidence_event_ids": [2, 1],
+      "handoff_hint": "Hermes may compare model requirements with known hardware and run only safe, small local checks."
+    }
+  ],
+  "recent_refs": [
+    {
+      "id": 2,
+      "source": "browser",
+      "kind": "tab",
+      "title": "Model X GitHub repository",
+      "url": "https://github.com/example/model-x",
+      "artifact_ref": null,
+      "occurred_at": "2026-05-27T00:00:00+00:00"
+    },
+    {
+      "id": 1,
+      "source": "video",
+      "kind": "youtube_watch",
+      "title": "Open model X: local inference and hardware requirements",
+      "url": "https://www.youtube.com/watch?v=example-model-x",
+      "artifact_ref": "artifacts/transcripts/example-model-x.txt",
+      "occurred_at": "2026-05-27T00:00:00+00:00"
+    }
+  ]
+}

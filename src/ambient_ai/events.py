@@ -1,0 +1,107 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+
+@dataclass(frozen=True)
+class AmbientEvent:
+    source: str
+    kind: str
+    title: str
+    url: str | None = None
+    artifact_ref: str | None = None
+    metadata: dict[str, Any] | None = None
+    occurred_at: str | None = None
+
+    def normalized(self) -> "AmbientEvent":
+        return AmbientEvent(
+            source=self.source,
+            kind=self.kind,
+            title=self.title.strip(),
+            url=self.url,
+            artifact_ref=self.artifact_ref,
+            metadata=self.metadata or {},
+            occurred_at=self.occurred_at or datetime.now(timezone.utc).isoformat(),
+        )
+
+
+class EventStore:
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+
+    def connect(self) -> sqlite3.Connection:
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def init(self) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    occurred_at TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    url TEXT,
+                    artifact_ref TEXT,
+                    metadata_json TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_events_occurred_at ON events(occurred_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_events_fingerprint ON events(fingerprint)")
+
+    def add_event(self, event: AmbientEvent) -> int:
+        normalized = event.normalized()
+        fingerprint = make_fingerprint(normalized)
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO events
+                    (occurred_at, source, kind, title, url, artifact_ref, metadata_json, fingerprint)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    normalized.occurred_at,
+                    normalized.source,
+                    normalized.kind,
+                    normalized.title,
+                    normalized.url,
+                    normalized.artifact_ref,
+                    json.dumps(normalized.metadata or {}, sort_keys=True),
+                    fingerprint,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def add_events(self, events: Iterable[AmbientEvent]) -> int:
+        count = 0
+        for event in events:
+            self.add_event(event)
+            count += 1
+        return count
+
+    def recent(self, limit: int = 100) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    "SELECT * FROM events ORDER BY occurred_at DESC, id DESC LIMIT ?",
+                    (limit,),
+                )
+            )
+
+
+def make_fingerprint(event: AmbientEvent) -> str:
+    key = "|".join([event.source, event.kind, event.title.lower(), event.url or ""])
+    return key[:512]
+

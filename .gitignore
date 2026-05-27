@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.context-workspace/
+.pytest_cache/
+.mypy_cache/
+.venv/
+data/*.sqlite3
+context/hot.json
+context/recent.md
+context/hermes-cron.md
+context/learning/trigger-outcomes.jsonl
