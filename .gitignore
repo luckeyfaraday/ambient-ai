@@ -8,5 +8,5 @@ data/*.sqlite3
 context/hot.json
 context/recent.md
 context/hermes-handoff.md
-context/hermes-cron.md
 context/learning/trigger-outcomes.jsonl
+context/learning/preferences.md

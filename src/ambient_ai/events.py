@@ -53,7 +53,7 @@ class EventStore:
                     url TEXT,
                     artifact_ref TEXT,
                     metadata_json TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL UNIQUE,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
                 """
@@ -61,35 +61,45 @@ class EventStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_occurred_at ON events(occurred_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_fingerprint ON events(fingerprint)")
 
-    def add_event(self, event: AmbientEvent) -> int:
+    def add_event(self, event: AmbientEvent) -> int | None:
         normalized = event.normalized()
         fingerprint = make_fingerprint(normalized)
         with self.connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO events
-                    (occurred_at, source, kind, title, url, artifact_ref, metadata_json, fingerprint)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    normalized.occurred_at,
-                    normalized.source,
-                    normalized.kind,
-                    normalized.title,
-                    normalized.url,
-                    normalized.artifact_ref,
-                    json.dumps(normalized.metadata or {}, sort_keys=True),
-                    fingerprint,
-                ),
-            )
-            return int(cursor.lastrowid)
+            return self._insert(conn, normalized, fingerprint)
 
     def add_events(self, events: Iterable[AmbientEvent]) -> int:
         count = 0
-        for event in events:
-            self.add_event(event)
-            count += 1
+        with self.connect() as conn:
+            for event in events:
+                normalized = event.normalized()
+                fingerprint = make_fingerprint(normalized)
+                if self._insert(conn, normalized, fingerprint) is not None:
+                    count += 1
         return count
+
+    def _insert(
+        self, conn: sqlite3.Connection, event: AmbientEvent, fingerprint: str
+    ) -> int | None:
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO events
+                (occurred_at, source, kind, title, url, artifact_ref, metadata_json, fingerprint)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.occurred_at,
+                event.source,
+                event.kind,
+                event.title,
+                event.url,
+                event.artifact_ref,
+                json.dumps(event.metadata or {}, sort_keys=True),
+                fingerprint,
+            ),
+        )
+        if cursor.rowcount > 0:
+            return int(cursor.lastrowid)
+        return None
 
     def recent(self, limit: int = 100) -> list[sqlite3.Row]:
         with self.connect() as conn:
