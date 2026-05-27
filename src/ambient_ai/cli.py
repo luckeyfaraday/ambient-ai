@@ -32,6 +32,8 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Git repository to collect. Defaults to the current working directory.",
     )
+    expire = subparsers.add_parser("expire")
+    expire.add_argument("--days", type=int, default=7, help="Remove events older than this many days.")
     subparsers.add_parser("smoke")
     args = parser.parse_args(argv)
 
@@ -75,6 +77,11 @@ def main(argv: list[str] | None = None) -> int:
                 repo_path=args.repo,
             )
         print(f"Daemon collected {inserted} new events")
+        return 0
+    if args.command == "expire":
+        store.init()
+        removed = store.expire(max_age_days=args.days)
+        print(f"Expired {removed} events older than {args.days} days")
         return 0
     if args.command == "smoke":
         paths.ensure()

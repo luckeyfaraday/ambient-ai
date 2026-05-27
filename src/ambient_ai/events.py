@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -119,6 +119,14 @@ class EventStore:
             """
         )
         conn.execute("CREATE UNIQUE INDEX idx_events_fingerprint ON events(fingerprint)")
+
+    def expire(self, max_age_days: int = 7) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM events WHERE occurred_at < ?", (cutoff.isoformat(),)
+            )
+            return cursor.rowcount
 
     def recent(self, limit: int = 100) -> list[sqlite3.Row]:
         with self.connect() as conn:

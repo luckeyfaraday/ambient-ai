@@ -27,6 +27,7 @@ def run_once(
     for collector in collectors or default_collectors(repo_path):
         events.extend(collector.collect())
     inserted = store.add_events(events)
+    store.expire()
     reduce_context(paths)
     write_hermes_prompt(paths)
     return inserted

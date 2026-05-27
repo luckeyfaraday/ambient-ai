@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ambient_ai.events import AmbientEvent, EventStore
@@ -55,6 +56,33 @@ class TestEventStore:
         for i in range(10):
             store.add_event(AmbientEvent(source="test", kind="unit", title=f"E{i}"))
         assert len(store.recent(limit=3)) == 3
+
+
+class TestExpire:
+    def test_removes_old_events(self, store):
+        old = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        recent = datetime.now(timezone.utc).isoformat()
+        store.add_event(AmbientEvent(source="test", kind="unit", title="Old", occurred_at=old))
+        store.add_event(AmbientEvent(source="test", kind="unit", title="Recent", occurred_at=recent))
+        removed = store.expire(max_age_days=7)
+        assert removed == 1
+        rows = store.recent()
+        assert len(rows) == 1
+        assert rows[0]["title"] == "Recent"
+
+    def test_keeps_all_within_window(self, store):
+        recent = datetime.now(timezone.utc).isoformat()
+        store.add_event(AmbientEvent(source="test", kind="unit", title="A", occurred_at=recent))
+        store.add_event(AmbientEvent(source="test", kind="unit", title="B", occurred_at=recent))
+        removed = store.expire(max_age_days=7)
+        assert removed == 0
+        assert len(store.recent()) == 2
+
+    def test_custom_retention(self, store):
+        two_days_ago = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        store.add_event(AmbientEvent(source="test", kind="unit", title="X", occurred_at=two_days_ago))
+        assert store.expire(max_age_days=3) == 0
+        assert store.expire(max_age_days=1) == 1
 
 
 class TestMigrationGate:
