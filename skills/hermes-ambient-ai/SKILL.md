@@ -24,6 +24,7 @@ Use this skill when a Hermes session is asked to consume Ambient AI context or w
 4. Act only on reversible local research, analysis, notes, tiny tests, prototypes, and drafts.
 5. Ask before external side effects, spending, deleting, committing, deploying, messaging, publishing, credential changes, or large downloads.
 6. Notify the user only for useful completed work, meaningful blockers, or required approval.
+7. Append learning outcomes only from explicit feedback or clear outcomes. Do not overfit from one event.
 
 ## Outputs
 
@@ -32,4 +33,4 @@ Use this skill when a Hermes session is asked to consume Ambient AI context or w
 - `blocked`: smallest required approval or missing fact.
 - `handoff`: bounded task for another external agent/tool, using `prompts/agent_work_contract.md`.
 
-When the user gives explicit feedback, append a short outcome entry to `context/learning/trigger-outcomes.jsonl` or update `context/learning/preferences.md` if the feedback is stable policy.
+When feedback or an outcome is clear, append a short entry to `context/learning/trigger-outcomes.jsonl` or update `context/learning/preferences.md` if the feedback is stable policy.

@@ -26,6 +26,12 @@ def main(argv: list[str] | None = None) -> int:
     daemon.add_argument("--interval", type=float, default=300.0, help="Seconds between collection cycles.")
     daemon.add_argument("--iterations", type=int, default=None, help="Stop after this many cycles.")
     daemon.add_argument("--once", action="store_true", help="Run one collection cycle and exit.")
+    daemon.add_argument(
+        "--repo",
+        type=Path,
+        default=None,
+        help="Git repository to collect. Defaults to the current working directory.",
+    )
     subparsers.add_parser("smoke")
     args = parser.parse_args(argv)
 
@@ -60,9 +66,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "daemon":
         if args.once:
-            inserted = run_once(paths)
+            inserted = run_once(paths, repo_path=args.repo)
         else:
-            inserted = run_daemon(paths, interval_seconds=args.interval, iterations=args.iterations)
+            inserted = run_daemon(
+                paths,
+                interval_seconds=args.interval,
+                iterations=args.iterations,
+                repo_path=args.repo,
+            )
         print(f"Daemon collected {inserted} new events")
         return 0
     if args.command == "smoke":

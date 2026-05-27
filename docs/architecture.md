@@ -37,9 +37,10 @@ Ambient AI is a local context substrate plus agent handoff contract. It continuo
 - `context/learning/trigger-outcomes.jsonl`: append-only outcome history.
 - `prompts/hermes_handoff.md.tmpl`: Hermes handoff template.
 - `prompts/agent_work_contract.md`: contract for external agents.
+- `skills/hermes-ambient-ai/SKILL.md`: Hermes consumer contract for Ambient handoff artifacts.
 
 ## Daemon Loop
 
 The `daemon` command runs collectors, appends events, reduces context, and renders the Hermes handoff. It is intentionally local and deterministic: no network calls, no LLM calls, and no direct control over external agent runtimes.
 
-Use `daemon --once` for one cycle or `daemon --interval 300` for a long-running local loop.
+Use `daemon --once --repo /path/to/repo` for one cycle or `daemon --interval 300 --repo /path/to/repo` for a long-running local loop. If `--repo` is omitted, the daemon collects the current working directory's Git repo.
