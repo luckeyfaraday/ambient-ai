@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -64,6 +65,56 @@ def main() -> int:
         assert hot2["event_count"] == hot["event_count"], (
             f"Duplicate ingest should not grow event count: {hot2['event_count']} != {hot['event_count']}"
         )
+
+    with tempfile.TemporaryDirectory(prefix="ambient-ai-legacy-db-") as tmp:
+        root = Path(tmp)
+        db_path = root / "data" / "ambient.sqlite3"
+        db_path.parent.mkdir()
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    occurred_at TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    url TEXT,
+                    artifact_ref TEXT,
+                    metadata_json TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute("CREATE INDEX idx_events_fingerprint ON events(fingerprint)")
+            for title in ("Old duplicate", "New duplicate"):
+                conn.execute(
+                    """
+                    INSERT INTO events
+                        (occurred_at, source, kind, title, url, artifact_ref, metadata_json, fingerprint)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "2026-05-27T00:00:00+00:00",
+                        "browser",
+                        "tab",
+                        title,
+                        "https://example.com/model",
+                        None,
+                        "{}",
+                        "browser|tab|duplicate|https://example.com/model",
+                    ),
+                )
+
+        run(["init"], root)
+        with sqlite3.connect(db_path) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+            assert count == 1, f"Legacy duplicate migration kept {count} rows"
+            index_unique = conn.execute(
+                "SELECT [unique] FROM pragma_index_list('events') WHERE name = 'idx_events_fingerprint'"
+            ).fetchone()
+            assert index_unique is not None and index_unique[0] == 1
 
     print("Ambient AI smoke check passed")
     return 0
