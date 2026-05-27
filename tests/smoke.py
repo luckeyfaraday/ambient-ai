@@ -31,6 +31,7 @@ def main() -> int:
 
         run(["init"], root)
         run(["ingest-sample"], root)
+        run(["collect-repo", "--repo", str(REPO_ROOT)], root)
         run(["reduce"], root)
         run(["render-hermes"], root)
 
@@ -47,11 +48,12 @@ def main() -> int:
             raise AssertionError(f"Missing expected files: {missing}")
 
         hot = json.loads((root / "context" / "hot.json").read_text(encoding="utf-8"))
-        assert hot["event_count"] == 4, f"Expected 4 events, got {hot['event_count']}"
-        assert hot["unique_event_count"] == 4
+        assert hot["event_count"] >= 5, f"Expected at least 5 events, got {hot['event_count']}"
+        assert hot["unique_event_count"] >= 5
         assert len(hot["candidate_threads"]) >= 1, "Expected at least one candidate thread"
         assert hot["candidate_threads"][0]["id"] == "local-model-viability"
         assert len(hot["recent_refs"]) > 0
+        assert any(ref["kind"] == "git_state" for ref in hot["recent_refs"])
 
         prompt = (root / "context" / "hermes-handoff.md").read_text(encoding="utf-8")
         assert "external agent runtime" in prompt
@@ -65,6 +67,10 @@ def main() -> int:
         assert hot2["event_count"] == hot["event_count"], (
             f"Duplicate ingest should not grow event count: {hot2['event_count']} != {hot['event_count']}"
         )
+
+        run(["daemon", "--once"], root)
+        daemon_hot = json.loads((root / "context" / "hot.json").read_text(encoding="utf-8"))
+        assert daemon_hot["event_count"] >= hot2["event_count"]
 
     with tempfile.TemporaryDirectory(prefix="ambient-ai-legacy-db-") as tmp:
         root = Path(tmp)

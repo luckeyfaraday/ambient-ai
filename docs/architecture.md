@@ -14,7 +14,7 @@ Ambient AI is a local context substrate plus agent handoff contract. It continuo
 
 - Standard-library Python only.
 - SQLite event log.
-- Placeholder collector classes for browser, video, app, repo, voice, and Athena.
+- Real local Git collector plus placeholder classes for browser, video, app, voice, and Athena.
 - Deterministic reducers before any LLM handoff.
 - Hermes handoff template and reusable agent work contract.
 - Learning files for explicit preferences and trigger outcomes.
@@ -37,3 +37,9 @@ Ambient AI is a local context substrate plus agent handoff contract. It continuo
 - `context/learning/trigger-outcomes.jsonl`: append-only outcome history.
 - `prompts/hermes_handoff.md.tmpl`: Hermes handoff template.
 - `prompts/agent_work_contract.md`: contract for external agents.
+
+## Daemon Loop
+
+The `daemon` command runs collectors, appends events, reduces context, and renders the Hermes handoff. It is intentionally local and deterministic: no network calls, no LLM calls, and no direct control over external agent runtimes.
+
+Use `daemon --once` for one cycle or `daemon --interval 300` for a long-running local loop.
