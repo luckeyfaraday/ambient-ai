@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -44,11 +45,25 @@ def main() -> int:
         if missing:
             raise AssertionError(f"Missing expected files: {missing}")
 
+        hot = json.loads((root / "context" / "hot.json").read_text(encoding="utf-8"))
+        assert hot["event_count"] == 4, f"Expected 4 events, got {hot['event_count']}"
+        assert hot["unique_event_count"] == 4
+        assert len(hot["candidate_threads"]) >= 1, "Expected at least one candidate thread"
+        assert hot["candidate_threads"][0]["id"] == "local-model-viability"
+        assert len(hot["recent_refs"]) > 0
+
         prompt = (root / "context" / "hermes-handoff.md").read_text(encoding="utf-8")
         assert "external agent runtime" in prompt
         assert "Do not ask the user what to do by default" in prompt
         assert "No-op silently" in prompt
         assert "large downloads" in prompt
+
+        run(["ingest-sample"], root)
+        run(["reduce"], root)
+        hot2 = json.loads((root / "context" / "hot.json").read_text(encoding="utf-8"))
+        assert hot2["event_count"] == hot["event_count"], (
+            f"Duplicate ingest should not grow event count: {hot2['event_count']} != {hot['event_count']}"
+        )
 
     print("Ambient AI smoke check passed")
     return 0
