@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import subprocess
 from hashlib import sha1
 from datetime import datetime, timezone
@@ -15,8 +16,89 @@ class Collector:
         return []
 
 
+_SKIP_SCHEMES = ("about:", "moz-extension:", "chrome:", "chrome-extension:", "file:")
+
+
 class BrowserCollector(Collector):
     source = "browser"
+
+    def __init__(self, since_minutes: int = 10):
+        self.since_minutes = since_minutes
+
+    def collect(self) -> list[AmbientEvent]:
+        events: list[AmbientEvent] = []
+        events.extend(self._collect_firefox())
+        return events
+
+    def _collect_firefox(self) -> list[AmbientEvent]:
+        profile = self._find_firefox_profile()
+        if not profile:
+            return []
+        db_path = profile / "places.sqlite"
+        if not db_path.exists():
+            return []
+        cutoff_us = int(
+            (datetime.now(timezone.utc).timestamp() - self.since_minutes * 60)
+            * 1_000_000
+        )
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT p.url, p.title, v.visit_date
+                FROM moz_historyvisits v
+                JOIN moz_places p ON v.place_id = p.id
+                WHERE v.visit_date > ?
+                ORDER BY v.visit_date DESC
+                LIMIT 50
+                """,
+                (cutoff_us,),
+            ).fetchall()
+            conn.close()
+        except (sqlite3.Error, OSError):
+            return []
+        now = datetime.now(timezone.utc).isoformat()
+        events: list[AmbientEvent] = []
+        for row in rows:
+            url = row["url"] or ""
+            title = row["title"] or ""
+            if not title or not url:
+                continue
+            if any(url.startswith(s) for s in _SKIP_SCHEMES):
+                continue
+            is_youtube = "youtube.com/watch" in url or "youtu.be/" in url
+            events.append(
+                AmbientEvent(
+                    source=self.source,
+                    kind="youtube_visit" if is_youtube else "history",
+                    title=title,
+                    url=url,
+                    occurred_at=now,
+                )
+            )
+        return events
+
+    def _find_firefox_profile(self) -> Path | None:
+        firefox_dir = Path.home() / ".mozilla" / "firefox"
+        if not firefox_dir.exists():
+            return None
+        candidates = [
+            p for p in firefox_dir.glob("*.default*")
+            if (p / "places.sqlite").exists()
+        ]
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+        best = None
+        best_mtime = 0.0
+        for p in candidates:
+            mtime = (p / "places.sqlite").stat().st_mtime
+            if mtime > best_mtime:
+                best_mtime = mtime
+                best = p
+        return best
 
 
 class VideoCollector(Collector):
