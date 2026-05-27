@@ -7,6 +7,8 @@ from pathlib import Path
 from ambient_ai.collectors import (
     AppWindowCollector,
     BrowserCollector,
+    TerminalHistoryCollector,
+    _clean_history_line,
     _parse_wmctrl,
     parse_status_files,
     parse_window_title,
@@ -240,3 +242,67 @@ class TestAppWindowCollector:
         active = [e for e in events if e.metadata.get("active")]
         assert len(active) == 1
         assert active[0].metadata["app"] == "chrome"
+
+
+class TestCleanHistoryLine:
+    def test_plain_command(self):
+        assert _clean_history_line("git status") == "git status"
+
+    def test_comment_skipped(self):
+        assert _clean_history_line("#1234567890") == ""
+
+    def test_zsh_timestamp_stripped(self):
+        assert _clean_history_line(": 1716835200:0;ls -la") == "ls -la"
+
+    def test_empty_line(self):
+        assert _clean_history_line("") == ""
+
+    def test_whitespace_stripped(self):
+        assert _clean_history_line("  cd /tmp  ") == "cd /tmp"
+
+
+class TestTerminalHistoryCollector:
+    def test_collect_returns_list(self):
+        events = TerminalHistoryCollector().collect()
+        assert isinstance(events, list)
+
+    def test_events_have_correct_shape(self):
+        for event in TerminalHistoryCollector().collect():
+            assert event.source == "terminal"
+            assert event.kind == "shell_command"
+            assert event.title
+
+    def test_reads_from_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hist = Path(tmp) / ".bash_history"
+            hist.write_text("git status\npython3 tests/smoke.py\nls\n")
+            collector = TerminalHistoryCollector(tail_lines=10)
+            collector._find_history_file = lambda: hist
+            events = collector.collect()
+            assert len(events) == 3
+            assert events[0].title == "git status"
+
+    def test_respects_tail_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hist = Path(tmp) / ".bash_history"
+            hist.write_text("\n".join(f"cmd{i}" for i in range(100)))
+            collector = TerminalHistoryCollector(tail_lines=5)
+            collector._find_history_file = lambda: hist
+            events = collector.collect()
+            assert len(events) == 5
+            assert events[0].title == "cmd95"
+
+    def test_no_history_returns_empty(self):
+        collector = TerminalHistoryCollector()
+        collector._find_history_file = lambda: None
+        assert collector.collect() == []
+
+    def test_short_commands_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hist = Path(tmp) / ".bash_history"
+            hist.write_text("l\nls -la\na\n")
+            collector = TerminalHistoryCollector(tail_lines=10)
+            collector._find_history_file = lambda: hist
+            events = collector.collect()
+            assert len(events) == 1
+            assert events[0].title == "ls -la"
