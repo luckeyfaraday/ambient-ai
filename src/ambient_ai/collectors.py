@@ -279,6 +279,67 @@ class RepoCollector(Collector):
         return result.stdout.strip()
 
 
+class TerminalHistoryCollector(Collector):
+    source = "terminal"
+
+    def __init__(self, tail_lines: int = 25):
+        self.tail_lines = tail_lines
+
+    def collect(self) -> list[AmbientEvent]:
+        history_path = self._find_history_file()
+        if not history_path:
+            return []
+        lines = self._read_tail(history_path)
+        if not lines:
+            return []
+        now = datetime.now(timezone.utc).isoformat()
+        events: list[AmbientEvent] = []
+        for cmd in lines:
+            if not cmd or len(cmd) < 2:
+                continue
+            events.append(
+                AmbientEvent(
+                    source=self.source,
+                    kind="shell_command",
+                    title=cmd,
+                    metadata={"shell": history_path.name},
+                    occurred_at=now,
+                )
+            )
+        return events
+
+    def _find_history_file(self) -> Path | None:
+        home = Path.home()
+        for name in (".zsh_history", ".bash_history"):
+            path = home / name
+            if path.exists() and path.stat().st_size > 0:
+                return path
+        return None
+
+    def _read_tail(self, path: Path) -> list[str]:
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            return []
+        lines = raw.decode("utf-8", errors="replace").splitlines()
+        recent = lines[-self.tail_lines:]
+        cleaned: list[str] = []
+        for line in recent:
+            cmd = _clean_history_line(line)
+            if cmd:
+                cleaned.append(cmd)
+        return cleaned
+
+
+def _clean_history_line(line: str) -> str:
+    line = line.strip()
+    if not line or line.startswith("#"):
+        return ""
+    if line.startswith(": ") and ";" in line:
+        line = line.split(";", 1)[1]
+    return line.strip()
+
+
 class VoiceCollector(Collector):
     source = "voice"
 
