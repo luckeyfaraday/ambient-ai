@@ -105,32 +105,88 @@ class VideoCollector(Collector):
     source = "video"
 
 
+_TITLE_NOISE = {"desktop", "nemo-desktop", "panel", "plank", "tint2"}
+
+_KNOWN_APPS: dict[str, str] = {
+    "mozilla firefox": "firefox",
+    "firefox": "firefox",
+    "google chrome": "chrome",
+    "chromium": "chromium",
+    "visual studio code": "vscode",
+    "code - oss": "vscode",
+    "sublime text": "sublime",
+    "gnome terminal": "gnome-terminal",
+    "konsole": "konsole",
+    "alacritty": "alacritty",
+    "kitty": "kitty",
+    "wezterm": "wezterm",
+    "nautilus": "nautilus",
+    "nemo": "nemo",
+    "thunar": "thunar",
+    "discord": "discord",
+    "slack": "slack",
+    "obsidian": "obsidian",
+    "pocket": "pocket",
+}
+
+
+def parse_window_title(raw: str) -> dict[str, str | None]:
+    for sep in (" — ", " - ", " – "):
+        if sep in raw:
+            parts = raw.rsplit(sep, 1)
+            content = parts[0].strip()
+            suffix = parts[1].strip()
+            app = _KNOWN_APPS.get(suffix.lower())
+            if app:
+                return {"title": content, "app": app, "raw": raw}
+    return {"title": raw.strip(), "app": None, "raw": raw}
+
+
 class AppWindowCollector(Collector):
     source = "app"
 
     def collect(self) -> list[AmbientEvent]:
-        title = self._xdotool(["getactivewindow", "getwindowname"])
-        if not title:
-            return []
-        wm_class = self._xdotool(["getactivewindow", "getwindowclassname"])
+        windows = self._list_windows()
+        active_wid = self._xdotool(["getactivewindow"])
         now = datetime.now(timezone.utc).isoformat()
-        meta: dict[str, object] = {}
-        if wm_class:
-            meta["wm_class"] = wm_class
-        return [
-            AmbientEvent(
-                source=self.source,
-                kind="active_window",
-                title=title,
-                metadata=meta,
-                occurred_at=now,
+        events: list[AmbientEvent] = []
+        for wid, raw_title in windows:
+            if raw_title.lower() in _TITLE_NOISE or len(raw_title) < 3:
+                continue
+            parsed = parse_window_title(raw_title)
+            meta: dict[str, object] = {}
+            if parsed["app"]:
+                meta["app"] = parsed["app"]
+            if wid == active_wid:
+                meta["active"] = True
+            events.append(
+                AmbientEvent(
+                    source=self.source,
+                    kind="window",
+                    title=parsed["title"],
+                    metadata=meta,
+                    occurred_at=now,
+                )
             )
-        ]
+        return events
+
+    def _list_windows(self) -> list[tuple[str, str]]:
+        output = self._run_cmd(["wmctrl", "-l"])
+        if output is not None:
+            return _parse_wmctrl(output)
+        title = self._xdotool(["getactivewindow", "getwindowname"])
+        if title:
+            wid = self._xdotool(["getactivewindow"]) or "0"
+            return [(wid, title)]
+        return []
 
     def _xdotool(self, args: list[str]) -> str | None:
+        return self._run_cmd(["xdotool", *args])
+
+    def _run_cmd(self, args: list[str]) -> str | None:
         try:
             result = subprocess.run(
-                ["xdotool", *args],
+                args,
                 capture_output=True,
                 text=True,
                 check=False,
@@ -141,6 +197,18 @@ class AppWindowCollector(Collector):
         if result.returncode != 0:
             return None
         return result.stdout.strip() or None
+
+
+def _parse_wmctrl(output: str) -> list[tuple[str, str]]:
+    windows: list[tuple[str, str]] = []
+    for line in output.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 4:
+            continue
+        wid = parts[0]
+        title = parts[3]
+        windows.append((wid, title))
+    return windows
 
 
 class RepoCollector(Collector):

@@ -79,7 +79,7 @@ def main() -> int:
     assert isinstance(window_events, list)
     for ev in window_events:
         assert ev.source == "app"
-        assert ev.kind == "active_window"
+        assert ev.kind == "window"
         assert ev.title
 
     with tempfile.TemporaryDirectory(prefix="ambient-ai-legacy-db-") as tmp:
