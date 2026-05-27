@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "src"))
 
 
 def run(args: list[str], root: Path) -> None:
@@ -73,6 +74,14 @@ def main() -> int:
         run(["daemon", "--once", "--repo", str(REPO_ROOT)], root)
         daemon_hot = json.loads((root / "context" / "hot.json").read_text(encoding="utf-8"))
         assert daemon_hot["event_count"] >= hot2["event_count"]
+
+    from ambient_ai.collectors import AppWindowCollector  # noqa: E402
+    window_events = AppWindowCollector().collect()
+    assert isinstance(window_events, list)
+    for ev in window_events:
+        assert ev.source == "app"
+        assert ev.kind == "active_window"
+        assert ev.title
 
     with tempfile.TemporaryDirectory(prefix="ambient-ai-legacy-db-") as tmp:
         root = Path(tmp)

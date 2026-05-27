@@ -26,6 +26,40 @@ class VideoCollector(Collector):
 class AppWindowCollector(Collector):
     source = "app"
 
+    def collect(self) -> list[AmbientEvent]:
+        title = self._xdotool(["getactivewindow", "getwindowname"])
+        if not title:
+            return []
+        wm_class = self._xdotool(["getactivewindow", "getwindowclassname"])
+        now = datetime.now(timezone.utc).isoformat()
+        meta: dict[str, object] = {}
+        if wm_class:
+            meta["wm_class"] = wm_class
+        return [
+            AmbientEvent(
+                source=self.source,
+                kind="active_window",
+                title=title,
+                metadata=meta,
+                occurred_at=now,
+            )
+        ]
+
+    def _xdotool(self, args: list[str]) -> str | None:
+        try:
+            result = subprocess.run(
+                ["xdotool", *args],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=3,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip() or None
+
 
 class RepoCollector(Collector):
     source = "repo"
