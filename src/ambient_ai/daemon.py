@@ -9,6 +9,7 @@ from .collectors import (
     BrowserCollector,
     Collector,
     RepoCollector,
+    SystemCollector,
     TerminalHistoryCollector,
 )
 from .events import EventStore
@@ -23,6 +24,7 @@ def default_collectors(repo_path: Path | None = None) -> list[Collector]:
         AppWindowCollector(),
         BrowserCollector(),
         TerminalHistoryCollector(),
+        SystemCollector(),
     ]
 
 

@@ -7,8 +7,11 @@ from pathlib import Path
 from ambient_ai.collectors import (
     AppWindowCollector,
     BrowserCollector,
+    SystemCollector,
     TerminalHistoryCollector,
     _clean_history_line,
+    _parse_ss_port,
+    _parse_ss_process,
     _parse_wmctrl,
     parse_status_files,
     parse_window_title,
@@ -306,3 +309,41 @@ class TestTerminalHistoryCollector:
             events = collector.collect()
             assert len(events) == 1
             assert events[0].title == "ls -la"
+
+
+class TestParseSsPort:
+    def test_extracts_port(self):
+        line = "LISTEN 0      4096  127.0.0.1:11434  0.0.0.0:*"
+        assert _parse_ss_port(line) == 11434
+
+    def test_returns_none_on_junk(self):
+        assert _parse_ss_port("no ports here") is None
+
+
+class TestParseSsProcess:
+    def test_extracts_process_name(self):
+        line = 'LISTEN 0  511  127.0.0.1:8080  0.0.0.0:*  users:(("node",pid=68738,fd=21))'
+        assert _parse_ss_process(line) == "node"
+
+    def test_returns_empty_on_no_match(self):
+        assert _parse_ss_process("LISTEN 0 128 0.0.0.0:22 0.0.0.0:*") == ""
+
+
+class TestSystemCollector:
+    def test_collect_returns_list(self):
+        events = SystemCollector().collect()
+        assert isinstance(events, list)
+
+    def test_hardware_event_present(self):
+        events = SystemCollector().collect()
+        hw = [e for e in events if e.kind == "hardware"]
+        if hw:
+            assert hw[0].source == "system"
+            assert "cores" in hw[0].title or "RAM" in hw[0].title
+
+    def test_services_event_shape(self):
+        events = SystemCollector().collect()
+        svc = [e for e in events if e.kind == "services"]
+        if svc:
+            assert "services" in svc[0].metadata
+            assert isinstance(svc[0].metadata["services"], list)

@@ -340,6 +340,220 @@ def _clean_history_line(line: str) -> str:
     return line.strip()
 
 
+_KNOWN_PORTS: dict[int, str] = {
+    5432: "postgres",
+    3306: "mysql",
+    6379: "redis",
+    27017: "mongodb",
+    8080: "http-alt",
+    8081: "http-alt",
+    3000: "dev-server",
+    5000: "dev-server",
+    5173: "vite",
+    5174: "vite",
+    4200: "angular",
+    3001: "dev-server",
+    8888: "jupyter",
+    11434: "ollama",
+    6463: "discord-rpc",
+}
+
+
+class SystemCollector(Collector):
+    source = "system"
+
+    def collect(self) -> list[AmbientEvent]:
+        now = datetime.now(timezone.utc).isoformat()
+        events: list[AmbientEvent] = []
+        hw = self._hardware_profile()
+        if hw:
+            events.append(
+                AmbientEvent(
+                    source=self.source,
+                    kind="hardware",
+                    title=hw["summary"],
+                    metadata=hw,
+                    occurred_at=now,
+                )
+            )
+        services = self._running_services()
+        if services:
+            names = [s["name"] for s in services]
+            events.append(
+                AmbientEvent(
+                    source=self.source,
+                    kind="services",
+                    title=f"{len(services)} services: {', '.join(names)}",
+                    metadata={"services": services},
+                    occurred_at=now,
+                )
+            )
+        return events
+
+    def _hardware_profile(self) -> dict[str, object] | None:
+        cpu = self._read_cpu()
+        mem = self._read_mem()
+        gpu = self._read_gpu()
+        disk = self._read_disk()
+        if not cpu and not mem:
+            return None
+        parts = []
+        if cpu:
+            parts.append(cpu)
+        if mem:
+            parts.append(mem)
+        if gpu:
+            parts.append(gpu)
+        if disk:
+            parts.append(disk)
+        profile: dict[str, object] = {"summary": " | ".join(parts)}
+        if cpu:
+            profile["cpu"] = cpu
+        if mem:
+            profile["mem"] = mem
+        if gpu:
+            profile["gpu"] = gpu
+        if disk:
+            profile["disk"] = disk
+        return profile
+
+    def _read_cpu(self) -> str:
+        try:
+            lines = Path("/proc/cpuinfo").read_text().splitlines()
+        except OSError:
+            return ""
+        model = ""
+        cores = 0
+        for line in lines:
+            if line.startswith("model name") and not model:
+                model = line.split(":", 1)[1].strip()
+            if line.startswith("processor"):
+                cores += 1
+        if not model:
+            return ""
+        return f"{model} ({cores} cores)"
+
+    def _read_mem(self) -> str:
+        try:
+            lines = Path("/proc/meminfo").read_text().splitlines()
+        except OSError:
+            return ""
+        for line in lines:
+            if line.startswith("MemTotal:"):
+                kb = int(line.split()[1])
+                gb = round(kb / 1024 / 1024, 1)
+                return f"{gb}GB RAM"
+        return ""
+
+    def _read_gpu(self) -> str:
+        try:
+            result = subprocess.run(
+                ["lspci"], capture_output=True, text=True, check=False, timeout=3,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+        if result.returncode != 0:
+            return ""
+        for line in result.stdout.splitlines():
+            low = line.lower()
+            if "vga" in low or "3d" in low or "display" in low:
+                return line.split(":", 2)[-1].strip() if ":" in line else line.strip()
+        return ""
+
+    def _read_disk(self) -> str:
+        try:
+            result = subprocess.run(
+                ["df", "-h", "/"], capture_output=True, text=True, check=False, timeout=3,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+        if result.returncode != 0:
+            return ""
+        lines = result.stdout.strip().splitlines()
+        if len(lines) < 2:
+            return ""
+        parts = lines[1].split()
+        if len(parts) >= 4:
+            return f"{parts[3]} free / {parts[1]} disk"
+        return ""
+
+    def _running_services(self) -> list[dict[str, object]]:
+        services: list[dict[str, object]] = []
+        services.extend(self._docker_containers())
+        services.extend(self._listening_ports())
+        return services
+
+    def _docker_containers(self) -> list[dict[str, object]]:
+        try:
+            result = subprocess.run(
+                ["docker", "ps", "--format", "{{.Names}}\t{{.Image}}\t{{.Status}}"],
+                capture_output=True, text=True, check=False, timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        if result.returncode != 0:
+            return []
+        containers: list[dict[str, object]] = []
+        for line in result.stdout.strip().splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                containers.append({
+                    "name": parts[0],
+                    "type": "docker",
+                    "image": parts[1],
+                    "status": parts[2] if len(parts) >= 3 else "",
+                })
+        return containers
+
+    def _listening_ports(self) -> list[dict[str, object]]:
+        try:
+            result = subprocess.run(
+                ["ss", "-tlnp"],
+                capture_output=True, text=True, check=False, timeout=3,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        if result.returncode != 0:
+            return []
+        services: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for line in result.stdout.splitlines():
+            if "LISTEN" not in line:
+                continue
+            port = _parse_ss_port(line)
+            if port is None or port in seen:
+                continue
+            name = _KNOWN_PORTS.get(port)
+            if not name:
+                name = _parse_ss_process(line) or f"port-{port}"
+            if name in seen:
+                continue
+            seen.add(name)
+            seen.add(port)
+            services.append({"name": name, "type": "listener", "port": port})
+        return services
+
+
+def _parse_ss_port(line: str) -> int | None:
+    parts = line.split()
+    for part in parts:
+        if ":" in part:
+            port_str = part.rsplit(":", 1)[-1]
+            if port_str.isdigit():
+                port = int(port_str)
+                if port > 0:
+                    return port
+    return None
+
+
+def _parse_ss_process(line: str) -> str:
+    if 'users:(("' in line:
+        start = line.index('users:(("') + 9
+        end = line.index('"', start)
+        return line[start:end]
+    return ""
+
+
 class VoiceCollector(Collector):
     source = "voice"
 
