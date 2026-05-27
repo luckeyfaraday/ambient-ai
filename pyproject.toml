@@ -1,7 +1,7 @@
 [project]
 name = "ambient-ai"
 version = "0.1.0"
-description = "Ambient AI context substrate and Hermes cron bridge MVP."
+description = "Ambient AI context substrate and external agent handoff MVP."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
@@ -15,4 +15,3 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-

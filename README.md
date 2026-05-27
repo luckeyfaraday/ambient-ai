@@ -2,7 +2,7 @@
 
 Ambient AI is a local context substrate for proactive agent work. It is not the LLM decision-maker and it is not just a context packet sender.
 
-The MVP captures cheap activity metadata, stores it locally, reduces it into compact context files, and renders a Hermes cron prompt. Hermes or another agent reads that context, decides whether useful autonomous work exists, acts within policy, and stays silent when there is nothing worth doing.
+The MVP captures cheap activity metadata, stores it locally, reduces it into compact context files, and renders an external agent handoff. Hermes or another agent reads that context, decides whether useful autonomous work exists, acts within policy, and stays silent when there is nothing worth doing.
 
 ## Product Boundary
 
@@ -14,8 +14,8 @@ The MVP captures cheap activity metadata, stores it locally, reduces it into com
 ## MVP Contents
 
 - `src/ambient_ai/`: Python package for event ingestion, SQLite storage, reducers, template rendering, and CLI commands.
-- `prompts/hermes_cron.md.tmpl`: recurring Hermes prompt for a 5 minute cron.
-- `prompts/agent_work_contract.md`: reusable spawned-agent work contract.
+- `prompts/hermes_handoff.md.tmpl`: Hermes-readable handoff prompt.
+- `prompts/agent_work_contract.md`: reusable external-agent work contract.
 - `context/`: generated local context files such as `hot.json`, `recent.md`, and `learning/preferences.md`.
 - `docs/architecture.md`: architecture and MVP scope.
 - `docs/model-video-scenario.md`: example open-source model video workflow.
@@ -27,7 +27,7 @@ The MVP captures cheap activity metadata, stores it locally, reduces it into com
 python3 tests/smoke.py
 ```
 
-The smoke check creates a temporary Ambient workspace, ingests sample events, runs reducers, renders the Hermes prompt, and verifies the expected context files exist.
+The smoke check creates a temporary Ambient workspace, ingests sample events, runs reducers, renders the Hermes handoff, and verifies the expected context files exist.
 
 ## Local CLI
 
@@ -42,12 +42,12 @@ PYTHONPATH=src python3 -m ambient_ai render-hermes
 
 Set `AMBIENT_AI_HOME=/path/to/workspace` to write context and data somewhere other than the current directory.
 
-## Hermes Cron Bridge
+## Hermes Handoff
 
-A practical MVP can run every 5 minutes:
+Refresh Ambient artifacts on a schedule:
 
 ```bash
-*/5 * * * * cd /path/to/ambient-ai && PYTHONPATH=src python3 -m ambient_ai render-hermes --output context/hermes-cron.md
+*/5 * * * * cd /path/to/ambient-ai && PYTHONPATH=src python3 -m ambient_ai render-hermes --output context/hermes-handoff.md
 ```
 
-Hermes should read `context/hermes-cron.md`, inspect referenced context files, and only notify the user for useful completed work, meaningful blockers, or required approval.
+Hermes should read `context/hermes-handoff.md`, inspect referenced context files, and only notify the user for useful completed work, meaningful blockers, or required approval.

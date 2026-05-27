@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "render-hermes":
         output = write_hermes_prompt(paths, args.output)
-        print(f"Rendered Hermes prompt to {output}")
+        print(f"Rendered Hermes handoff to {output}")
         return 0
     if args.command == "smoke":
         paths.ensure()
@@ -58,4 +58,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

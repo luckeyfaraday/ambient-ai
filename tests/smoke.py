@@ -22,8 +22,8 @@ def main() -> int:
         root = Path(tmp)
         prompts = root / "prompts"
         prompts.mkdir()
-        (prompts / "hermes_cron.md.tmpl").write_text(
-            (REPO_ROOT / "prompts" / "hermes_cron.md.tmpl").read_text(encoding="utf-8"),
+        (prompts / "hermes_handoff.md.tmpl").write_text(
+            (REPO_ROOT / "prompts" / "hermes_handoff.md.tmpl").read_text(encoding="utf-8"),
             encoding="utf-8",
         )
 
@@ -36,7 +36,7 @@ def main() -> int:
             root / "data" / "ambient.sqlite3",
             root / "context" / "hot.json",
             root / "context" / "recent.md",
-            root / "context" / "hermes-cron.md",
+            root / "context" / "hermes-handoff.md",
             root / "context" / "learning" / "preferences.md",
             root / "context" / "learning" / "trigger-outcomes.jsonl",
         ]
@@ -44,7 +44,8 @@ def main() -> int:
         if missing:
             raise AssertionError(f"Missing expected files: {missing}")
 
-        prompt = (root / "context" / "hermes-cron.md").read_text(encoding="utf-8")
+        prompt = (root / "context" / "hermes-handoff.md").read_text(encoding="utf-8")
+        assert "external agent runtime" in prompt
         assert "Do not ask the user what to do by default" in prompt
         assert "No-op silently" in prompt
         assert "large downloads" in prompt
