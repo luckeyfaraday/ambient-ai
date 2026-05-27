@@ -6,11 +6,10 @@ from .paths import AmbientPaths
 
 
 def render_hermes_prompt(paths: AmbientPaths) -> str:
-    template_path = paths.prompts_dir / "hermes_cron.md.tmpl"
+    template = default_template()
+    template_path = paths.prompts_dir / "hermes_handoff.md.tmpl"
     if template_path.exists():
         template = template_path.read_text(encoding="utf-8")
-    else:
-        template = default_template()
     return template.format(
         root=paths.root,
         hot_json=paths.context_dir / "hot.json",
@@ -24,16 +23,18 @@ def render_hermes_prompt(paths: AmbientPaths) -> str:
 def write_hermes_prompt(paths: AmbientPaths, output: Path | None = None) -> Path:
     paths.ensure()
     prompt = render_hermes_prompt(paths)
-    output_path = output or paths.context_dir / "hermes-cron.md"
+    output_path = output or paths.context_dir / "hermes-handoff.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(prompt, encoding="utf-8")
     return output_path
 
 
 def default_template() -> str:
-    return """# Ambient AI Hermes Cron
+    return """# Ambient AI Hermes Handoff
 
 Workspace: {root}
+
+You are Hermes, an external agent runtime reading an Ambient AI context handoff.
 
 Read:
 - Hot context: {hot_json}
@@ -44,4 +45,3 @@ Read:
 
 Decide whether useful autonomous work exists. If not, no-op silently.
 """
-

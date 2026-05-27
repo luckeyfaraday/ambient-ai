@@ -12,7 +12,7 @@ Ambient AI captures cheap signals:
 
 Reducers collapse repeated tabs and video events into a candidate thread such as `local-model-viability`. The thread preserves event ids, URLs, and artifact paths instead of embedding large transcripts.
 
-Hermes reads the 5 minute cron prompt and decides whether there is useful work:
+Hermes reads the Ambient handoff and decides whether there is useful work:
 
 - Compare published model requirements with the user's hardware profile.
 - Search local context for prior attempts or preferences.
