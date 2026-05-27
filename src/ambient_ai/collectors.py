@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import subprocess
+from hashlib import sha1
 from datetime import datetime, timezone
+from pathlib import Path
 
 from .events import AmbientEvent
 
@@ -26,6 +29,70 @@ class AppWindowCollector(Collector):
 
 class RepoCollector(Collector):
     source = "repo"
+
+    def __init__(self, repo_path: Path | None = None):
+        self.repo_path = (repo_path or Path.cwd()).resolve()
+
+    def collect(self) -> list[AmbientEvent]:
+        root = self._git(["rev-parse", "--show-toplevel"])
+        if root is None:
+            return []
+
+        repo_root = Path(root)
+        branch = self._git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_root) or "unknown"
+        head = self._git(["rev-parse", "--short", "HEAD"], cwd=repo_root)
+        status = self._git(["status", "--porcelain"], cwd=repo_root) or ""
+        latest = self._git(["log", "-1", "--pretty=format:%h %s"], cwd=repo_root)
+        changed_files = parse_status_files(status)
+        status_digest = sha1(status.encode("utf-8")).hexdigest()[:12] if status else "clean"
+        state = "dirty" if changed_files else "clean"
+        now = datetime.now(timezone.utc).isoformat()
+        repo_name = repo_root.name
+
+        events = [
+            AmbientEvent(
+                source=self.source,
+                kind="git_state",
+                title=f"{repo_name} repo {state} on {branch} ({len(changed_files)} files, {status_digest})",
+                metadata={
+                    "repo": repo_name,
+                    "branch": branch,
+                    "head": head,
+                    "dirty": bool(changed_files),
+                    "status_digest": status_digest,
+                    "changed_file_count": len(changed_files),
+                    "changed_files": changed_files[:25],
+                },
+                occurred_at=now,
+            )
+        ]
+        if latest:
+            events.append(
+                AmbientEvent(
+                    source=self.source,
+                    kind="git_commit",
+                    title=f"{repo_name} latest commit {latest}",
+                    metadata={"repo": repo_name, "branch": branch, "head": head},
+                    occurred_at=now,
+                )
+            )
+        return events
+
+    def _git(self, args: list[str], cwd: Path | None = None) -> str | None:
+        try:
+            result = subprocess.run(
+                ["git", *args],
+                cwd=cwd or self.repo_path,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip()
 
 
 class VoiceCollector(Collector):
@@ -73,3 +140,14 @@ def sample_events() -> list[AmbientEvent]:
         ),
     ]
 
+
+def parse_status_files(status: str) -> list[str]:
+    files: list[str] = []
+    for line in status.splitlines():
+        if not line:
+            continue
+        path = line[3:] if len(line) > 3 else line
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        files.append(path)
+    return files
