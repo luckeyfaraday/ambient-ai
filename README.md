@@ -16,6 +16,7 @@ The MVP captures cheap activity metadata, stores it locally, reduces it into com
 - `src/ambient_ai/`: Python package for event ingestion, SQLite storage, reducers, template rendering, and CLI commands.
 - `prompts/hermes_handoff.md.tmpl`: Hermes-readable handoff prompt.
 - `prompts/agent_work_contract.md`: reusable external-agent work contract.
+- `skills/hermes-ambient-ai/SKILL.md`: Hermes consumer contract.
 - `context/`: generated local context files such as `hot.json`, `recent.md`, and `learning/preferences.md`.
 - `docs/architecture.md`: architecture and MVP scope.
 - `docs/model-video-scenario.md`: example open-source model video workflow.
@@ -39,12 +40,12 @@ PYTHONPATH=src python3 -m ambient_ai ingest-sample
 PYTHONPATH=src python3 -m ambient_ai collect-repo
 PYTHONPATH=src python3 -m ambient_ai reduce
 PYTHONPATH=src python3 -m ambient_ai render-hermes
-PYTHONPATH=src python3 -m ambient_ai daemon --once
+PYTHONPATH=src python3 -m ambient_ai daemon --once --repo /path/to/repo
 ```
 
 Set `AMBIENT_AI_HOME=/path/to/workspace` to write context and data somewhere other than the current directory.
 
-`collect-repo` captures local Git branch, head, dirty state, and changed-file references. `daemon --once` runs one collection/reduction/handoff cycle; omit `--once` to keep looping.
+`collect-repo` captures local Git branch, head, dirty state, and changed-file references. `daemon --once` runs one collection/reduction/handoff cycle; omit `--once` to keep looping. If `--repo` is omitted, the daemon collects the current working directory's Git repo.
 
 ## Hermes Handoff
 

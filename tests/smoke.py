@@ -56,6 +56,8 @@ def main() -> int:
         assert any(ref["kind"] == "git_state" for ref in hot["recent_refs"])
 
         prompt = (root / "context" / "hermes-handoff.md").read_text(encoding="utf-8")
+        assert (REPO_ROOT / "skills" / "hermes-ambient-ai" / "SKILL.md").exists()
+        assert "hermes-ambient-ai" in prompt
         assert "external agent runtime" in prompt
         assert "Do not ask the user what to do by default" in prompt
         assert "No-op silently" in prompt
@@ -68,7 +70,7 @@ def main() -> int:
             f"Duplicate ingest should not grow event count: {hot2['event_count']} != {hot['event_count']}"
         )
 
-        run(["daemon", "--once"], root)
+        run(["daemon", "--once", "--repo", str(REPO_ROOT)], root)
         daemon_hot = json.loads((root / "context" / "hot.json").read_text(encoding="utf-8"))
         assert daemon_hot["event_count"] >= hot2["event_count"]
 
