@@ -10,7 +10,7 @@ Ambient AI captures cheap signals:
 - Local hardware profile references when available.
 - Related Athena or repo activity.
 
-Reducers collapse repeated tabs and video events into a candidate thread such as `local-model-viability`. The thread preserves event ids, URLs, and artifact paths instead of embedding large transcripts.
+Reducers dedupe repeated tabs and video events into compact references with event ids, URLs, and artifact paths instead of embedding large transcripts.
 
 Hermes reads the Ambient handoff and decides whether there is useful work:
 

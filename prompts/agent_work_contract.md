@@ -6,7 +6,7 @@ Ambient AI provides context and policy. You decide whether to act, stop, ask, or
 
 ## Inputs
 
-- Read `context/hot.json` for candidate threads and compact references.
+- Read `context/hot.json` for compact references.
 - Read `context/recent.md` for human-readable recent activity.
 - Read `context/learning/preferences.md` for explicit user preferences.
 - Use artifact references instead of embedding huge transcripts or logs.
@@ -18,7 +18,7 @@ Return one of:
 - `no_action`: nothing worth doing now.
 - `done`: useful work completed safely.
 - `blocked`: approval or missing information is required.
-- `delegated`: another agent/tool is better suited and has been given a bounded task.
+- `handoff`: another agent/tool is better suited and has been given a bounded task.
 
 ## Policy
 
