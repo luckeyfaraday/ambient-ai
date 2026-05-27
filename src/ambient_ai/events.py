@@ -102,6 +102,11 @@ class EventStore:
         return None
 
     def _ensure_unique_fingerprints(self, conn: sqlite3.Connection) -> None:
+        row = conn.execute(
+            "SELECT [unique] FROM pragma_index_list('events') WHERE name = 'idx_events_fingerprint'"
+        ).fetchone()
+        if row is not None and row[0] == 1:
+            return
         conn.execute("DROP INDEX IF EXISTS idx_events_fingerprint")
         conn.execute(
             """
@@ -113,7 +118,7 @@ class EventStore:
             )
             """
         )
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_events_fingerprint ON events(fingerprint)")
+        conn.execute("CREATE UNIQUE INDEX idx_events_fingerprint ON events(fingerprint)")
 
     def recent(self, limit: int = 100) -> list[sqlite3.Row]:
         with self.connect() as conn:

@@ -4,7 +4,7 @@ import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from .collectors import Collector, RepoCollector
+from .collectors import AppWindowCollector, BrowserCollector, Collector, RepoCollector
 from .events import EventStore
 from .paths import AmbientPaths
 from .reducers import reduce_context
@@ -12,7 +12,7 @@ from .renderer import write_hermes_prompt
 
 
 def default_collectors(repo_path: Path | None = None) -> list[Collector]:
-    return [RepoCollector(repo_path)]
+    return [RepoCollector(repo_path), AppWindowCollector(), BrowserCollector()]
 
 
 def run_once(

@@ -22,13 +22,14 @@ The MVP captures cheap activity metadata, stores it locally, reduces it into com
 - `docs/model-video-scenario.md`: example open-source model video workflow.
 - `tests/smoke.py`: smoke check for context generation and prompt rendering.
 
-## Run The Smoke Check
+## Tests
 
 ```bash
+python3 -m pytest tests/ -v
 python3 tests/smoke.py
 ```
 
-The smoke check creates a temporary Ambient workspace, ingests sample events, runs reducers, renders the Hermes handoff, and verifies the expected context files exist.
+`pytest` runs unit tests for fingerprinting, collectors, reducers, event storage, and migration. The standalone smoke check runs the full CLI pipeline end-to-end in a temp directory.
 
 ## Local CLI
 
