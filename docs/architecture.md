@@ -14,7 +14,7 @@ Ambient AI is a local context substrate plus agent handoff contract. It continuo
 
 - Standard-library Python only.
 - SQLite event log.
-- Real local Git collector plus placeholder classes for browser, video, app, voice, and Athena.
+- Real collectors for Git, browser history (Firefox), and active window, plus placeholder classes for video, voice, and Athena.
 - Deterministic reducers before any LLM handoff.
 - Hermes handoff template and reusable agent work contract.
 - Learning files for explicit preferences and trigger outcomes.

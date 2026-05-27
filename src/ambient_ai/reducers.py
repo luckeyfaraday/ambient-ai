@@ -29,7 +29,6 @@ def reduce_context(paths: AmbientPaths, limit: int = 100) -> dict[str, object]:
         "event_count": len(rows),
         "unique_event_count": len(items),
         "duplicate_count": duplicate_count,
-        "candidate_threads": candidate_threads(items),
         "recent_refs": [
             {
                 "id": row["id"],
@@ -50,22 +49,6 @@ def reduce_context(paths: AmbientPaths, limit: int = 100) -> dict[str, object]:
     return hot
 
 
-def candidate_threads(rows: list[object]) -> list[dict[str, object]]:
-    video_model_refs = [
-        row for row in rows if row["source"] in {"video", "browser"} and "model" in row["title"].lower()
-    ]
-    if not video_model_refs:
-        return []
-    return [
-        {
-            "id": "local-model-viability",
-            "summary": "Recent activity suggests the user may be evaluating an open-source model for local use.",
-            "evidence_event_ids": [row["id"] for row in video_model_refs[:6]],
-            "handoff_hint": "Hermes may compare model requirements with known hardware and run only safe, small local checks.",
-        }
-    ]
-
-
 def render_recent_md(hot: dict[str, object]) -> str:
     lines = [
         "# Ambient Recent Context",
@@ -73,18 +56,9 @@ def render_recent_md(hot: dict[str, object]) -> str:
         f"Generated: {hot['generated_at']}",
         f"Events: {hot['event_count']} total, {hot['unique_event_count']} unique, {hot['duplicate_count']} duplicates collapsed",
         "",
-        "## Candidate Threads",
+        "## Recent References",
         "",
     ]
-    threads = hot["candidate_threads"]
-    if threads:
-        for thread in threads:
-            lines.append(f"- `{thread['id']}`: {thread['summary']}")
-            lines.append(f"  Evidence events: {', '.join(str(item) for item in thread['evidence_event_ids'])}")
-    else:
-        lines.append("- None.")
-
-    lines.extend(["", "## Recent References", ""])
     for ref in hot["recent_refs"]:
         line = f"- [{ref['source']}/{ref['kind']}] {ref['title']}"
         if ref["url"]:

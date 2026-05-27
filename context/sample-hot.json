@@ -3,14 +3,6 @@
   "event_count": 4,
   "unique_event_count": 4,
   "duplicate_count": 0,
-  "candidate_threads": [
-    {
-      "id": "local-model-viability",
-      "summary": "Recent activity suggests the user may be evaluating an open-source model for local use.",
-      "evidence_event_ids": [2, 1],
-      "handoff_hint": "Hermes may compare model requirements with known hardware and run only safe, small local checks."
-    }
-  ],
   "recent_refs": [
     {
       "id": 2,

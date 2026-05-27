@@ -51,8 +51,7 @@ def main() -> int:
         hot = json.loads((root / "context" / "hot.json").read_text(encoding="utf-8"))
         assert hot["event_count"] >= 5, f"Expected at least 5 events, got {hot['event_count']}"
         assert hot["unique_event_count"] >= 5
-        assert len(hot["candidate_threads"]) >= 1, "Expected at least one candidate thread"
-        assert hot["candidate_threads"][0]["id"] == "local-model-viability"
+        assert "candidate_threads" not in hot
         assert len(hot["recent_refs"]) > 0
         assert any(ref["kind"] == "git_state" for ref in hot["recent_refs"])
 
