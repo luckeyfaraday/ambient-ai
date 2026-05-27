@@ -7,7 +7,9 @@ from pathlib import Path
 from ambient_ai.collectors import (
     AppWindowCollector,
     BrowserCollector,
+    _parse_wmctrl,
     parse_status_files,
+    parse_window_title,
     sample_events,
 )
 
@@ -146,6 +148,62 @@ class TestBrowserCollector:
         assert collector.collect() == []
 
 
+class TestParseWindowTitle:
+    def test_firefox(self):
+        p = parse_window_title("GitHub — Mozilla Firefox")
+        assert p["title"] == "GitHub"
+        assert p["app"] == "firefox"
+
+    def test_chrome(self):
+        p = parse_window_title("Gmail - Google Chrome")
+        assert p["title"] == "Gmail"
+        assert p["app"] == "chrome"
+
+    def test_vscode(self):
+        p = parse_window_title("main.py — ambient-ai — Visual Studio Code")
+        assert p["title"] == "main.py — ambient-ai"
+        assert p["app"] == "vscode"
+
+    def test_en_dash_separator(self):
+        p = parse_window_title("Page Title – Mozilla Firefox")
+        assert p["title"] == "Page Title"
+        assert p["app"] == "firefox"
+
+    def test_unknown_app(self):
+        p = parse_window_title("Some Window - UnknownApp")
+        assert p["title"] == "Some Window - UnknownApp"
+        assert p["app"] is None
+
+    def test_no_separator(self):
+        p = parse_window_title("ATHENA")
+        assert p["title"] == "ATHENA"
+        assert p["app"] is None
+
+    def test_discord(self):
+        p = parse_window_title("#general | Server - Discord")
+        assert p["title"] == "#general | Server"
+        assert p["app"] == "discord"
+
+
+class TestParseWmctrl:
+    def test_parses_lines(self):
+        output = (
+            "0x04000001  0 myhost Desktop\n"
+            "0x06a00001  0 myhost GitHub — Mozilla Firefox\n"
+            "0x02c00003  0 myhost ATHENA"
+        )
+        windows = _parse_wmctrl(output)
+        assert len(windows) == 3
+        assert windows[0] == ("0x04000001", "Desktop")
+        assert windows[1] == ("0x06a00001", "GitHub — Mozilla Firefox")
+
+    def test_empty_output(self):
+        assert _parse_wmctrl("") == []
+
+    def test_short_lines_skipped(self):
+        assert _parse_wmctrl("0x01  0 host") == []
+
+
 class TestAppWindowCollector:
     def test_collect_returns_list(self):
         events = AppWindowCollector().collect()
@@ -154,5 +212,31 @@ class TestAppWindowCollector:
     def test_events_have_correct_shape(self):
         for event in AppWindowCollector().collect():
             assert event.source == "app"
-            assert event.kind == "active_window"
+            assert event.kind == "window"
             assert event.title
+
+    def test_filters_desktop_noise(self):
+        collector = AppWindowCollector()
+        collector._list_windows = lambda: [
+            ("0x01", "Desktop"),
+            ("0x02", "nemo-desktop"),
+            ("0x03", "GitHub — Mozilla Firefox"),
+        ]
+        collector._xdotool = lambda args: "0x03"
+        events = collector.collect()
+        assert len(events) == 1
+        assert events[0].title == "GitHub"
+        assert events[0].metadata.get("app") == "firefox"
+        assert events[0].metadata.get("active") is True
+
+    def test_marks_active_window(self):
+        collector = AppWindowCollector()
+        collector._list_windows = lambda: [
+            ("0x01", "ATHENA"),
+            ("0x02", "Gmail - Google Chrome"),
+        ]
+        collector._xdotool = lambda args: "0x02"
+        events = collector.collect()
+        active = [e for e in events if e.metadata.get("active")]
+        assert len(active) == 1
+        assert active[0].metadata["app"] == "chrome"
