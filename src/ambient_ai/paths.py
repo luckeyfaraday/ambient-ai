@@ -16,7 +16,7 @@ class AmbientPaths:
 
     @classmethod
     def from_env(cls, root: Path | None = None) -> "AmbientPaths":
-        resolved_root = Path(os.environ.get("AMBIENT_AI_HOME") or root or Path.cwd()).resolve()
+        resolved_root = Path(root or os.environ.get("AMBIENT_AI_HOME") or Path.cwd()).resolve()
         return cls(
             root=resolved_root,
             data_dir=resolved_root / "data",

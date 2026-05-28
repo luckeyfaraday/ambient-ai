@@ -5,6 +5,7 @@ __pycache__/
 .mypy_cache/
 .venv/
 data/*.sqlite3
+data/*.log
 context/hot.json
 context/recent.md
 context/hermes-handoff.md
