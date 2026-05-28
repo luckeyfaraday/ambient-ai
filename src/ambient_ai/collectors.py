@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import os
+import re
 import sqlite3
 import subprocess
-import re
 from contextlib import closing
 from hashlib import sha1
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ class Collector:
 
 
 _SKIP_SCHEMES = ("about:", "moz-extension:", "chrome:", "chrome-extension:", "file:")
+_CHROME_EPOCH_OFFSET_SECONDS = 11_644_473_600
 _SECRET_ENV_PATTERN = re.compile(
     r"(?i)\b([A-Z0-9_]*(?:TOKEN|API_KEY|SECRET|PASSWORD|PASSWD|PRIVATE_KEY)[A-Z0-9_]*)=([^\s]+)"
 )
@@ -37,6 +39,7 @@ class BrowserCollector(Collector):
     def collect(self) -> list[AmbientEvent]:
         events: list[AmbientEvent] = []
         events.extend(self._collect_firefox())
+        events.extend(self._collect_chrome())
         return events
 
     def _collect_firefox(self) -> list[AmbientEvent]:
@@ -69,6 +72,41 @@ class BrowserCollector(Collector):
                 ]
         except (sqlite3.Error, OSError):
             return []
+        return self._history_events(rows)
+
+    def _collect_chrome(self) -> list[AmbientEvent]:
+        db_path = self._find_chrome_history()
+        if not db_path or not db_path.exists():
+            return []
+        cutoff_chrome_us = int(
+            (
+                datetime.now(timezone.utc).timestamp()
+                + _CHROME_EPOCH_OFFSET_SECONDS
+                - self.since_minutes * 60
+            )
+            * 1_000_000
+        )
+        try:
+            with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = [
+                    {"url": row["url"], "title": row["title"]}
+                    for row in conn.execute(
+                        """
+                        SELECT url, title, last_visit_time
+                        FROM urls
+                        WHERE last_visit_time > ?
+                        ORDER BY last_visit_time DESC
+                        LIMIT 50
+                        """,
+                        (cutoff_chrome_us,),
+                    ).fetchall()
+                ]
+        except (sqlite3.Error, OSError):
+            return []
+        return self._history_events(rows)
+
+    def _history_events(self, rows: list[dict[str, str | None]]) -> list[AmbientEvent]:
         now = datetime.now(timezone.utc).isoformat()
         events: list[AmbientEvent] = []
         for row in rows:
@@ -110,6 +148,36 @@ class BrowserCollector(Collector):
                 best_mtime = mtime
                 best = p
         return best
+
+    def _find_chrome_history(self) -> Path | None:
+        candidates = [
+            path
+            for root in self._chrome_roots()
+            for path in root.glob("*/History")
+            if path.exists()
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda path: path.stat().st_mtime)
+
+    def _chrome_roots(self) -> list[Path]:
+        home = Path.home()
+        roots = [
+            home / ".config" / "google-chrome",
+            home / ".config" / "chromium",
+            home / "Library" / "Application Support" / "Google" / "Chrome",
+            home / "Library" / "Application Support" / "Chromium",
+        ]
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            roots.extend(
+                [
+                    Path(local_app_data) / "Google" / "Chrome" / "User Data",
+                    Path(local_app_data) / "Chromium" / "User Data",
+                    Path(local_app_data) / "Microsoft" / "Edge" / "User Data",
+                ]
+            )
+        return [root for root in roots if root.exists()]
 
 
 class VideoCollector(Collector):

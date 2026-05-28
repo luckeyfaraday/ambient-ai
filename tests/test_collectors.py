@@ -81,6 +81,22 @@ def _make_firefox_places(profile_dir: Path, rows: list[tuple[str, str, int]]) ->
         conn.commit()
 
 
+def _make_chrome_history(profile_dir: Path, rows: list[tuple[str, str, int]]) -> None:
+    """Create a minimal Chrome History database with rows of (url, title, last_visit_time_us)."""
+    db_path = profile_dir / "History"
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.execute(
+            "CREATE TABLE urls "
+            "(id INTEGER PRIMARY KEY, url TEXT, title TEXT, last_visit_time INTEGER)"
+        )
+        for i, (url, title, last_visit_time) in enumerate(rows, 1):
+            conn.execute(
+                "INSERT INTO urls (id, url, title, last_visit_time) VALUES (?, ?, ?, ?)",
+                (i, url, title, last_visit_time),
+            )
+        conn.commit()
+
+
 class TestBrowserCollector:
     def test_collect_returns_list(self):
         events = BrowserCollector().collect()
@@ -153,7 +169,69 @@ class TestBrowserCollector:
     def test_no_profile_returns_empty(self):
         collector = BrowserCollector()
         collector._find_firefox_profile = lambda: None
+        collector._find_chrome_history = lambda: None
         assert collector.collect() == []
+
+    def test_chrome_youtube_tagged(self):
+        from datetime import datetime, timezone
+
+        chrome_offset_seconds = 11_644_473_600
+        now_us = int((datetime.now(timezone.utc).timestamp() + chrome_offset_seconds) * 1_000_000)
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp) / "Default"
+            profile.mkdir()
+            _make_chrome_history(profile, [
+                ("https://youtu.be/abc123", "Short Video", now_us),
+                ("https://github.com/foo/bar", "GitHub Repo", now_us),
+            ])
+            collector = BrowserCollector(since_minutes=5)
+            collector._find_firefox_profile = lambda: None
+            collector._find_chrome_history = lambda: profile / "History"
+            events = collector.collect()
+
+        kinds = {event.kind for event in events}
+        assert kinds == {"youtube_visit", "history"}
+
+    def test_chrome_skips_internal_urls(self):
+        from datetime import datetime, timezone
+
+        chrome_offset_seconds = 11_644_473_600
+        now_us = int((datetime.now(timezone.utc).timestamp() + chrome_offset_seconds) * 1_000_000)
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp) / "Default"
+            profile.mkdir()
+            _make_chrome_history(profile, [
+                ("chrome://settings", "Settings", now_us),
+                ("chrome-extension://abc/options.html", "Extension", now_us),
+                ("file:///Users/me/doc.html", "Local Doc", now_us),
+            ])
+            collector = BrowserCollector(since_minutes=5)
+            collector._find_firefox_profile = lambda: None
+            collector._find_chrome_history = lambda: profile / "History"
+            events = collector.collect()
+
+        assert events == []
+
+    def test_chrome_respects_since_window(self):
+        from datetime import datetime, timezone
+
+        chrome_offset_seconds = 11_644_473_600
+        now_us = int((datetime.now(timezone.utc).timestamp() + chrome_offset_seconds) * 1_000_000)
+        old_us = now_us - 3600 * 1_000_000
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp) / "Default"
+            profile.mkdir()
+            _make_chrome_history(profile, [
+                ("https://recent.com", "Recent", now_us),
+                ("https://old.com", "Old", old_us),
+            ])
+            collector = BrowserCollector(since_minutes=5)
+            collector._find_firefox_profile = lambda: None
+            collector._find_chrome_history = lambda: profile / "History"
+            events = collector.collect()
+
+        assert len(events) == 1
+        assert events[0].url == "https://recent.com"
 
 
 class TestParseWindowTitle:
