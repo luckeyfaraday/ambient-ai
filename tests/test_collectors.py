@@ -15,6 +15,7 @@ from ambient_ai.collectors import (
     _parse_wmctrl,
     parse_status_files,
     parse_window_title,
+    redact_command,
     sample_events,
 )
 
@@ -310,6 +311,29 @@ class TestTerminalHistoryCollector:
             assert len(events) == 1
             assert events[0].title == "ls -la"
 
+    def test_redacts_secret_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hist = Path(tmp) / ".bash_history"
+            hist.write_text(
+                "OPENAI_API_KEY=sk-test curl example.com\n"
+                "deploy --token abc123 --password hunter2\n"
+                "curl -H 'Authorization: Bearer secret-token' https://example.com\n"
+            )
+            collector = TerminalHistoryCollector(tail_lines=10)
+            collector._find_history_file = lambda: hist
+            titles = [event.title for event in collector.collect()]
+
+        assert titles == [
+            "OPENAI_API_KEY=[REDACTED] curl example.com",
+            "deploy --token [REDACTED] --password [REDACTED]",
+            "curl -H 'Authorization: Bearer [REDACTED]' https://example.com",
+        ]
+
+
+class TestRedactCommand:
+    def test_redacts_env_and_flags(self):
+        assert redact_command("TOKEN=abc cmd --api-key xyz") == "TOKEN=[REDACTED] cmd --api-key [REDACTED]"
+
 
 class TestParseSsPort:
     def test_extracts_port(self):
@@ -347,3 +371,13 @@ class TestSystemCollector:
         if svc:
             assert "services" in svc[0].metadata
             assert isinstance(svc[0].metadata["services"], list)
+
+    def test_listening_ports_keeps_repeated_service_names(self):
+        collector = SystemCollector()
+        output = (
+            "LISTEN 0 511 127.0.0.1:3000 0.0.0.0:* users:((\"node\",pid=1,fd=1))\n"
+            "LISTEN 0 511 127.0.0.1:3001 0.0.0.0:* users:((\"node\",pid=2,fd=1))\n"
+        )
+        collector._run_ss = lambda: output
+        services = collector._listening_ports()
+        assert [service["port"] for service in services] == [3000, 3001]
