@@ -35,14 +35,67 @@ _BEARER_PATTERN = re.compile(r"(?i)(Authorization:\s*Bearer\s+)([^\s'\"\\]+)")
 class BrowserCollector(Collector):
     source = "browser"
 
-    def __init__(self, since_minutes: int = 60):
+    def __init__(self, since_minutes: int = 60, browser: str | None = None):
         self.since_minutes = since_minutes
+        self.browser = browser
 
     def collect(self) -> list[AmbientEvent]:
-        events: list[AmbientEvent] = []
-        events.extend(self._collect_firefox())
-        events.extend(self._collect_chrome())
-        return events
+        browser = self.browser or self._choose_browser()
+        if browser == "firefox":
+            return self._collect_firefox()
+        if browser == "chrome":
+            return self._collect_chrome()
+        return []
+
+    def _choose_browser(self) -> str | None:
+        return self._detect_default_browser() or self._detect_by_recency()
+
+    def _detect_default_browser(self) -> str | None:
+        for cmd in (
+            ["xdg-settings", "get", "default-web-browser"],
+            ["xdg-mime", "query", "default", "x-scheme-handler/https"],
+        ):
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if result.returncode != 0:
+                continue
+            family = self._family_from_desktop(result.stdout.strip())
+            if family:
+                return family
+        return None
+
+    @staticmethod
+    def _family_from_desktop(desktop: str) -> str | None:
+        name = desktop.lower()
+        if "firefox" in name or "librewolf" in name or "waterfox" in name:
+            return "firefox"
+        if any(k in name for k in ("chrome", "chromium", "edge", "brave", "vivaldi", "opera")):
+            return "chrome"
+        return None
+
+    def _detect_by_recency(self) -> str | None:
+        firefox_mtime = self._mtime_or_none(self._find_firefox_profile(), "places.sqlite")
+        chrome_history = self._find_chrome_history()
+        chrome_mtime = self._mtime_or_none(chrome_history) if chrome_history else None
+        if firefox_mtime is None and chrome_mtime is None:
+            return None
+        if chrome_mtime is None:
+            return "firefox"
+        if firefox_mtime is None:
+            return "chrome"
+        return "firefox" if firefox_mtime >= chrome_mtime else "chrome"
+
+    @staticmethod
+    def _mtime_or_none(path: Path | None, child: str | None = None) -> float | None:
+        if path is None:
+            return None
+        target = path / child if child else path
+        try:
+            return target.stat().st_mtime
+        except OSError:
+            return None
 
     def _collect_firefox(self) -> list[AmbientEvent]:
         profile = self._find_firefox_profile()

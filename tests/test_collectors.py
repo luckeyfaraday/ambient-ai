@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import tempfile
 from contextlib import closing
@@ -119,7 +120,7 @@ class TestBrowserCollector:
                 ("https://github.com/foo/bar", "GitHub Repo", now_us),
                 ("about:preferences", "Settings", now_us),
             ])
-            collector = BrowserCollector(since_minutes=5)
+            collector = BrowserCollector(since_minutes=5, browser="firefox")
             collector._find_firefox_profile = lambda: profile
             events = collector.collect()
 
@@ -142,7 +143,7 @@ class TestBrowserCollector:
                 ("chrome://settings", "Chrome Settings", now_us),
                 ("file:///home/user/doc.html", "Local File", now_us),
             ])
-            collector = BrowserCollector(since_minutes=5)
+            collector = BrowserCollector(since_minutes=5, browser="firefox")
             collector._find_firefox_profile = lambda: profile
             events = collector.collect()
 
@@ -160,7 +161,7 @@ class TestBrowserCollector:
                 ("https://recent.com", "Recent", now_us),
                 ("https://old.com", "Old", old_us),
             ])
-            collector = BrowserCollector(since_minutes=5)
+            collector = BrowserCollector(since_minutes=5, browser="firefox")
             collector._find_firefox_profile = lambda: profile
             events = collector.collect()
 
@@ -185,7 +186,7 @@ class TestBrowserCollector:
                 ("https://youtu.be/abc123", "Short Video", now_us),
                 ("https://github.com/foo/bar", "GitHub Repo", now_us),
             ])
-            collector = BrowserCollector(since_minutes=5)
+            collector = BrowserCollector(since_minutes=5, browser="chrome")
             collector._find_firefox_profile = lambda: None
             collector._find_chrome_history = lambda: profile / "History"
             events = collector.collect()
@@ -206,7 +207,7 @@ class TestBrowserCollector:
                 ("chrome-extension://abc/options.html", "Extension", now_us),
                 ("file:///Users/me/doc.html", "Local Doc", now_us),
             ])
-            collector = BrowserCollector(since_minutes=5)
+            collector = BrowserCollector(since_minutes=5, browser="chrome")
             collector._find_firefox_profile = lambda: None
             collector._find_chrome_history = lambda: profile / "History"
             events = collector.collect()
@@ -226,7 +227,7 @@ class TestBrowserCollector:
                 ("https://recent.com", "Recent", now_us),
                 ("https://old.com", "Old", old_us),
             ])
-            collector = BrowserCollector(since_minutes=5)
+            collector = BrowserCollector(since_minutes=5, browser="chrome")
             collector._find_firefox_profile = lambda: None
             collector._find_chrome_history = lambda: profile / "History"
             events = collector.collect()
@@ -249,6 +250,69 @@ class TestBrowserCollector:
             assert destination.read_text() == "db"
             assert Path(f"{destination}-wal").read_text() == "wal"
             assert Path(f"{destination}-shm").read_text() == "shm"
+
+
+class TestBrowserDetection:
+    def test_family_from_desktop(self):
+        cases = {
+            "firefox.desktop": "firefox",
+            "org.mozilla.firefox.desktop": "firefox",
+            "librewolf.desktop": "firefox",
+            "google-chrome.desktop": "chrome",
+            "chromium.desktop": "chrome",
+            "microsoft-edge.desktop": "chrome",
+            "brave-browser.desktop": "chrome",
+            "vivaldi-stable.desktop": "chrome",
+            "": None,
+            "konqueror.desktop": None,
+        }
+        for desktop, expected in cases.items():
+            assert BrowserCollector._family_from_desktop(desktop) == expected
+
+    def test_collect_honors_browser_override(self):
+        collector = BrowserCollector(browser="chrome")
+        collector._detect_default_browser = lambda: "firefox"
+        collector._collect_firefox = lambda: ["firefox-event"]
+        collector._collect_chrome = lambda: ["chrome-event"]
+        assert collector.collect() == ["chrome-event"]
+
+    def test_choose_browser_prefers_default_over_recency(self):
+        collector = BrowserCollector()
+        collector._detect_default_browser = lambda: "chrome"
+        collector._detect_by_recency = lambda: "firefox"
+        assert collector._choose_browser() == "chrome"
+
+    def test_choose_browser_falls_back_to_recency(self):
+        collector = BrowserCollector()
+        collector._detect_default_browser = lambda: None
+        collector._detect_by_recency = lambda: "firefox"
+        assert collector._choose_browser() == "firefox"
+
+    def test_detect_by_recency_picks_more_recently_used(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            firefox_profile = root / "ff"
+            firefox_profile.mkdir()
+            (firefox_profile / "places.sqlite").write_text("ff")
+            chrome_history = root / "chrome-History"
+            chrome_history.write_text("cr")
+
+            collector = BrowserCollector()
+            collector._find_firefox_profile = lambda: firefox_profile
+            collector._find_chrome_history = lambda: chrome_history
+
+            os.utime(firefox_profile / "places.sqlite", (1000, 1000))
+            os.utime(chrome_history, (2000, 2000))
+            assert collector._detect_by_recency() == "chrome"
+
+            os.utime(firefox_profile / "places.sqlite", (3000, 3000))
+            assert collector._detect_by_recency() == "firefox"
+
+    def test_detect_by_recency_none_when_no_browsers(self):
+        collector = BrowserCollector()
+        collector._find_firefox_profile = lambda: None
+        collector._find_chrome_history = lambda: None
+        assert collector._detect_by_recency() is None
 
 
 class TestParseWindowTitle:
