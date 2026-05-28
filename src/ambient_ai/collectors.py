@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import subprocess
 import re
+from contextlib import closing
 from hashlib import sha1
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,20 +51,22 @@ class BrowserCollector(Collector):
             * 1_000_000
         )
         try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                """
-                SELECT p.url, p.title, v.visit_date
-                FROM moz_historyvisits v
-                JOIN moz_places p ON v.place_id = p.id
-                WHERE v.visit_date > ?
-                ORDER BY v.visit_date DESC
-                LIMIT 50
-                """,
-                (cutoff_us,),
-            ).fetchall()
-            conn.close()
+            with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = [
+                    {"url": row["url"], "title": row["title"]}
+                    for row in conn.execute(
+                        """
+                        SELECT p.url, p.title, v.visit_date
+                        FROM moz_historyvisits v
+                        JOIN moz_places p ON v.place_id = p.id
+                        WHERE v.visit_date > ?
+                        ORDER BY v.visit_date DESC
+                        LIMIT 50
+                        """,
+                        (cutoff_us,),
+                    ).fetchall()
+                ]
         except (sqlite3.Error, OSError):
             return []
         now = datetime.now(timezone.utc).isoformat()

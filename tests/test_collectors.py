@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import tempfile
+from contextlib import closing
 from pathlib import Path
 
 from ambient_ai.collectors import (
@@ -59,7 +60,7 @@ class TestSampleEvents:
 def _make_firefox_places(profile_dir: Path, rows: list[tuple[str, str, int]]) -> None:
     """Create a minimal Firefox places.sqlite with visit rows of (url, title, visit_date_us)."""
     db_path = profile_dir / "places.sqlite"
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute(
             "CREATE TABLE moz_places "
             "(id INTEGER PRIMARY KEY, url TEXT, title TEXT)"
@@ -77,6 +78,7 @@ def _make_firefox_places(profile_dir: Path, rows: list[tuple[str, str, int]]) ->
                 "INSERT INTO moz_historyvisits (place_id, visit_date) VALUES (?, ?)",
                 (i, visit_date),
             )
+        conn.commit()
 
 
 class TestBrowserCollector:

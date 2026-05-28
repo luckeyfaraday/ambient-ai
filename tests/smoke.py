@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+from contextlib import closing
 from pathlib import Path
 
 
@@ -86,7 +87,7 @@ def main() -> int:
         root = Path(tmp)
         db_path = root / "data" / "ambient.sqlite3"
         db_path.parent.mkdir()
-        with sqlite3.connect(db_path) as conn:
+        with closing(sqlite3.connect(db_path)) as conn:
             conn.execute(
                 """
                 CREATE TABLE events (
@@ -122,9 +123,10 @@ def main() -> int:
                         "browser|tab|duplicate|https://example.com/model",
                     ),
                 )
+            conn.commit()
 
         run(["init"], root)
-        with sqlite3.connect(db_path) as conn:
+        with closing(sqlite3.connect(db_path)) as conn:
             count = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
             assert count == 1, f"Legacy duplicate migration kept {count} rows"
             index_unique = conn.execute(
