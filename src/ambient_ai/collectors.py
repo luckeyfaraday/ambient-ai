@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import subprocess
+import re
 from hashlib import sha1
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,13 @@ class Collector:
 
 
 _SKIP_SCHEMES = ("about:", "moz-extension:", "chrome:", "chrome-extension:", "file:")
+_SECRET_ENV_PATTERN = re.compile(
+    r"(?i)\b([A-Z0-9_]*(?:TOKEN|API_KEY|SECRET|PASSWORD|PASSWD|PRIVATE_KEY)[A-Z0-9_]*)=([^\s]+)"
+)
+_SECRET_FLAG_PATTERN = re.compile(
+    r"(?i)(--(?:token|api-key|secret|password|passwd|private-key)(?:=|\s+))([^\s]+)"
+)
+_BEARER_PATTERN = re.compile(r"(?i)(Authorization:\s*Bearer\s+)([^\s'\"\\]+)")
 
 
 class BrowserCollector(Collector):
@@ -297,6 +305,7 @@ class TerminalHistoryCollector(Collector):
         for cmd in lines:
             if not cmd or len(cmd) < 2:
                 continue
+            cmd = redact_command(cmd)
             events.append(
                 AmbientEvent(
                     source=self.source,
@@ -338,6 +347,13 @@ def _clean_history_line(line: str) -> str:
     if line.startswith(": ") and ";" in line:
         line = line.split(";", 1)[1]
     return line.strip()
+
+
+def redact_command(command: str) -> str:
+    command = _SECRET_ENV_PATTERN.sub(r"\1=[REDACTED]", command)
+    command = _SECRET_FLAG_PATTERN.sub(r"\1[REDACTED]", command)
+    command = _BEARER_PATTERN.sub(r"\1[REDACTED]", command)
+    return command
 
 
 _KNOWN_PORTS: dict[int, str] = {
@@ -451,7 +467,7 @@ class SystemCollector(Collector):
                 ["lspci"], capture_output=True, text=True, check=False, timeout=3,
             )
         except (OSError, subprocess.TimeoutExpired):
-            return ""
+            return []
         if result.returncode != 0:
             return ""
         for line in result.stdout.splitlines():
@@ -490,7 +506,7 @@ class SystemCollector(Collector):
                 capture_output=True, text=True, check=False, timeout=5,
             )
         except (OSError, subprocess.TimeoutExpired):
-            return []
+            return ""
         if result.returncode != 0:
             return []
         containers: list[dict[str, object]] = []
@@ -506,32 +522,35 @@ class SystemCollector(Collector):
         return containers
 
     def _listening_ports(self) -> list[dict[str, object]]:
+        output = self._run_ss()
+        if not output:
+            return []
+        services: list[dict[str, object]] = []
+        seen_ports: set[int] = set()
+        for line in output.splitlines():
+            if "LISTEN" not in line:
+                continue
+            port = _parse_ss_port(line)
+            if port is None or port in seen_ports:
+                continue
+            name = _KNOWN_PORTS.get(port)
+            if not name:
+                name = _parse_ss_process(line) or f"port-{port}"
+            seen_ports.add(port)
+            services.append({"name": name, "type": "listener", "port": port})
+        return services
+
+    def _run_ss(self) -> str:
         try:
             result = subprocess.run(
                 ["ss", "-tlnp"],
                 capture_output=True, text=True, check=False, timeout=3,
             )
         except (OSError, subprocess.TimeoutExpired):
-            return []
+            return ""
         if result.returncode != 0:
-            return []
-        services: list[dict[str, object]] = []
-        seen: set[str] = set()
-        for line in result.stdout.splitlines():
-            if "LISTEN" not in line:
-                continue
-            port = _parse_ss_port(line)
-            if port is None or port in seen:
-                continue
-            name = _KNOWN_PORTS.get(port)
-            if not name:
-                name = _parse_ss_process(line) or f"port-{port}"
-            if name in seen:
-                continue
-            seen.add(name)
-            seen.add(port)
-            services.append({"name": name, "type": "listener", "port": port})
-        return services
+            return ""
+        return result.stdout
 
 
 def _parse_ss_port(line: str) -> int | None:
