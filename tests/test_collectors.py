@@ -14,6 +14,7 @@ from ambient_ai.collectors import (
     _parse_ss_port,
     _parse_ss_process,
     _parse_wmctrl,
+    copy_sqlite_database,
     parse_status_files,
     parse_window_title,
     redact_command,
@@ -232,6 +233,22 @@ class TestBrowserCollector:
 
         assert len(events) == 1
         assert events[0].url == "https://recent.com"
+
+    def test_chrome_history_copy_includes_wal_sidecars(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "Default" / "History"
+            source.parent.mkdir()
+            source.write_text("db")
+            Path(f"{source}-wal").write_text("wal")
+            Path(f"{source}-shm").write_text("shm")
+
+            destination = root / "copy" / "History"
+            copy_sqlite_database(source, destination)
+
+            assert destination.read_text() == "db"
+            assert Path(f"{destination}-wal").read_text() == "wal"
+            assert Path(f"{destination}-shm").read_text() == "shm"
 
 
 class TestParseWindowTitle:

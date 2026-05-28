@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
+import tempfile
 from contextlib import closing
 from hashlib import sha1
 from datetime import datetime, timezone
@@ -87,21 +89,23 @@ class BrowserCollector(Collector):
             * 1_000_000
         )
         try:
-            with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)) as conn:
-                conn.row_factory = sqlite3.Row
-                rows = [
-                    {"url": row["url"], "title": row["title"]}
-                    for row in conn.execute(
-                        """
-                        SELECT url, title, last_visit_time
-                        FROM urls
-                        WHERE last_visit_time > ?
-                        ORDER BY last_visit_time DESC
-                        LIMIT 50
-                        """,
-                        (cutoff_chrome_us,),
-                    ).fetchall()
-                ]
+            with tempfile.TemporaryDirectory(prefix="ambient-ai-chrome-history-") as tmp:
+                history_copy = copy_sqlite_database(db_path, Path(tmp) / "History")
+                with closing(sqlite3.connect(history_copy, timeout=2)) as conn:
+                    conn.row_factory = sqlite3.Row
+                    rows = [
+                        {"url": row["url"], "title": row["title"]}
+                        for row in conn.execute(
+                            """
+                            SELECT url, title, last_visit_time
+                            FROM urls
+                            WHERE last_visit_time > ?
+                            ORDER BY last_visit_time DESC
+                            LIMIT 50
+                            """,
+                            (cutoff_chrome_us,),
+                        ).fetchall()
+                    ]
         except (sqlite3.Error, OSError):
             return []
         return self._history_events(rows)
@@ -165,8 +169,10 @@ class BrowserCollector(Collector):
         roots = [
             home / ".config" / "google-chrome",
             home / ".config" / "chromium",
+            home / ".config" / "microsoft-edge",
             home / "Library" / "Application Support" / "Google" / "Chrome",
             home / "Library" / "Application Support" / "Chromium",
+            home / "Library" / "Application Support" / "Microsoft Edge",
         ]
         local_app_data = os.environ.get("LOCALAPPDATA")
         if local_app_data:
@@ -178,6 +184,16 @@ class BrowserCollector(Collector):
                 ]
             )
         return [root for root in roots if root.exists()]
+
+
+def copy_sqlite_database(source: Path, destination: Path) -> Path:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(f"{source}{suffix}")
+        if sidecar.exists():
+            shutil.copy2(sidecar, Path(f"{destination}{suffix}"))
+    return destination
 
 
 class VideoCollector(Collector):
