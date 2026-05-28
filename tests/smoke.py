@@ -70,7 +70,7 @@ def main() -> int:
             f"Duplicate ingest should not grow event count: {hot2['event_count']} != {hot['event_count']}"
         )
 
-        run(["daemon", "--once", "--repo", str(REPO_ROOT)], root)
+        run(["daemon", "--once", "--repo", str(REPO_ROOT), "--collectors", "repo"], root)
         daemon_hot = json.loads((root / "context" / "hot.json").read_text(encoding="utf-8"))
         assert daemon_hot["event_count"] >= hot2["event_count"]
 

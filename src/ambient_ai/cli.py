@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from .collectors import RepoCollector, sample_events
-from .daemon import run_daemon, run_once
+from .daemon import COLLECTOR_NAMES, normalize_collector_names, run_daemon, run_once
 from .events import EventStore
 from .paths import AmbientPaths
 from .reducers import reduce_context
@@ -31,6 +32,21 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help="Git repository to collect. Defaults to the current working directory.",
+    )
+    daemon.add_argument(
+        "--collectors",
+        default=os.environ.get("AMBIENT_AI_COLLECTORS"),
+        help=(
+            "Comma-separated collectors to run. Choices: "
+            f"{', '.join(COLLECTOR_NAMES)}. Defaults to all."
+        ),
+    )
+    daemon.add_argument(
+        "--disable-collector",
+        action="append",
+        default=[],
+        choices=COLLECTOR_NAMES,
+        help="Disable a collector by name. May be repeated.",
     )
     expire = subparsers.add_parser("expire")
     expire.add_argument("--days", type=int, default=7, help="Remove events older than this many days.")
@@ -67,14 +83,29 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Rendered Hermes handoff to {output}")
         return 0
     if args.command == "daemon":
+        try:
+            enabled_collectors = parse_collectors(args.collectors)
+            disabled_collectors = [
+                *parse_collectors(os.environ.get("AMBIENT_AI_DISABLE_COLLECTORS")),
+                *args.disable_collector,
+            ]
+        except ValueError as exc:
+            parser.error(str(exc))
         if args.once:
-            inserted = run_once(paths, repo_path=args.repo)
+            inserted = run_once(
+                paths,
+                repo_path=args.repo,
+                enabled_collectors=enabled_collectors,
+                disabled_collectors=disabled_collectors,
+            )
         else:
             inserted = run_daemon(
                 paths,
                 interval_seconds=args.interval,
                 iterations=args.iterations,
                 repo_path=args.repo,
+                enabled_collectors=enabled_collectors,
+                disabled_collectors=disabled_collectors,
             )
         print(f"Daemon collected {inserted} new events")
         return 0
@@ -92,6 +123,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Smoke OK: {output}")
         return 0
     raise AssertionError(args.command)
+
+
+def parse_collectors(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return normalize_collector_names([value])
 
 
 if __name__ == "__main__":

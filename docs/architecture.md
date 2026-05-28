@@ -44,3 +44,9 @@ Ambient AI is a local context substrate plus agent handoff contract. It continuo
 The `daemon` command runs collectors, appends events, reduces context, and renders the Hermes handoff. It is intentionally local and deterministic: no network calls, no LLM calls, and no direct control over external agent runtimes.
 
 Use `daemon --once --repo /path/to/repo` for one cycle or `daemon --interval 300 --repo /path/to/repo` for a long-running local loop. If `--repo` is omitted, the daemon collects the current working directory's Git repo.
+
+Collector controls:
+
+- `--collectors repo,system` runs only the named collectors.
+- `--disable-collector terminal` disables a named collector and may be repeated.
+- `AMBIENT_AI_COLLECTORS` and `AMBIENT_AI_DISABLE_COLLECTORS` provide the same controls for unattended runs.

@@ -42,11 +42,12 @@ PYTHONPATH=src python3 -m ambient_ai collect-repo
 PYTHONPATH=src python3 -m ambient_ai reduce
 PYTHONPATH=src python3 -m ambient_ai render-hermes
 PYTHONPATH=src python3 -m ambient_ai daemon --once --repo /path/to/repo
+PYTHONPATH=src python3 -m ambient_ai daemon --once --collectors repo,system
 ```
 
 Set `AMBIENT_AI_HOME=/path/to/workspace` to write context and data somewhere other than the current directory.
 
-`collect-repo` captures local Git branch, head, dirty state, and changed-file references. `daemon --once` runs one collection/reduction/handoff cycle; omit `--once` to keep looping. If `--repo` is omitted, the daemon collects the current working directory's Git repo.
+`collect-repo` captures local Git branch, head, dirty state, and changed-file references. `daemon --once` runs one collection/reduction/handoff cycle; omit `--once` to keep looping. If `--repo` is omitted, the daemon collects the current working directory's Git repo. Use `--collectors repo,system` or repeated `--disable-collector terminal` flags to control what runs.
 
 ## Hermes Handoff
 

@@ -18,26 +18,73 @@ from .reducers import reduce_context
 from .renderer import write_hermes_prompt
 
 
+COLLECTOR_NAMES = ("repo", "app", "browser", "terminal", "system")
+
+
+def build_collectors(
+    repo_path: Path | None = None,
+    enabled: Iterable[str] | None = None,
+    disabled: Iterable[str] | None = None,
+) -> list[Collector]:
+    enabled_names = normalize_collector_names(enabled) if enabled else list(COLLECTOR_NAMES)
+    disabled_names = set(normalize_collector_names(disabled) if disabled else [])
+    collectors: list[Collector] = []
+    for name in enabled_names:
+        if name in disabled_names:
+            continue
+        if name == "repo":
+            collectors.append(RepoCollector(repo_path))
+        elif name == "app":
+            collectors.append(AppWindowCollector())
+        elif name == "browser":
+            collectors.append(BrowserCollector())
+        elif name == "terminal":
+            collectors.append(TerminalHistoryCollector())
+        elif name == "system":
+            collectors.append(SystemCollector())
+        else:
+            raise ValueError(f"Unknown collector: {name}")
+    return collectors
+
+
+def normalize_collector_names(names: Iterable[str]) -> list[str]:
+    normalized: list[str] = []
+    for item in names:
+        for name in item.split(","):
+            clean = name.strip().lower()
+            if clean:
+                normalized.append(clean)
+    unknown = sorted(set(normalized) - set(COLLECTOR_NAMES))
+    if unknown:
+        raise ValueError(f"Unknown collector(s): {', '.join(unknown)}")
+    return normalized
+
+
 def default_collectors(repo_path: Path | None = None) -> list[Collector]:
-    return [
-        RepoCollector(repo_path),
-        AppWindowCollector(),
-        BrowserCollector(),
-        TerminalHistoryCollector(),
-        SystemCollector(),
-    ]
+    return build_collectors(repo_path)
 
 
 def run_once(
     paths: AmbientPaths,
     collectors: Iterable[Collector] | None = None,
     repo_path: Path | None = None,
+    enabled_collectors: Iterable[str] | None = None,
+    disabled_collectors: Iterable[str] | None = None,
 ) -> int:
     paths.ensure()
     store = EventStore(paths.db_path)
     store.init()
     events = []
-    for collector in collectors or default_collectors(repo_path):
+    selected_collectors = (
+        collectors
+        if collectors is not None
+        else build_collectors(
+            repo_path,
+            enabled=enabled_collectors,
+            disabled=disabled_collectors,
+        )
+    )
+    for collector in selected_collectors:
         events.extend(collector.collect())
     inserted = store.add_events(events)
     store.expire()
@@ -51,12 +98,19 @@ def run_daemon(
     interval_seconds: float,
     iterations: int | None = None,
     repo_path: Path | None = None,
+    enabled_collectors: Iterable[str] | None = None,
+    disabled_collectors: Iterable[str] | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
     total_inserted = 0
     completed = 0
     while iterations is None or completed < iterations:
-        total_inserted += run_once(paths, repo_path=repo_path)
+        total_inserted += run_once(
+            paths,
+            repo_path=repo_path,
+            enabled_collectors=enabled_collectors,
+            disabled_collectors=disabled_collectors,
+        )
         completed += 1
         if iterations is not None and completed >= iterations:
             break
