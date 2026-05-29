@@ -176,7 +176,9 @@ class TestBrowserCollector:
     def test_no_profile_returns_empty(self):
         collector = BrowserCollector()
         collector._find_firefox_profile = lambda: None
-        collector._find_chrome_history = lambda: None
+        # _find_chrome_history takes a browser arg; accept any so the test holds
+        # regardless of which browser _choose_browser() picks for the environment.
+        collector._find_chrome_history = lambda *args, **kwargs: None
         assert collector.collect() == []
 
     def test_chrome_youtube_tagged(self):
