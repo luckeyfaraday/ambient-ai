@@ -14,12 +14,14 @@ from ambient_ai.collectors import (
     _clean_history_line,
     _parse_ss_port,
     _parse_ss_process,
+    _parse_endpoint_port,
     _parse_wmctrl,
     copy_sqlite_database,
     is_low_signal_url,
     parse_status_files,
     parse_window_title,
     redact_command,
+    sanitize_browser_url,
     sample_events,
 )
 
@@ -112,7 +114,8 @@ class TestBrowserCollector:
     def test_youtube_tagged(self):
         from datetime import datetime, timezone
 
-        now_us = int(datetime.now(timezone.utc).timestamp() * 1_000_000)
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        now_us = int(now.timestamp() * 1_000_000)
         with tempfile.TemporaryDirectory() as tmp:
             profile = Path(tmp) / "test.default-release"
             profile.mkdir()
@@ -131,6 +134,7 @@ class TestBrowserCollector:
         urls = {e.url for e in events}
         assert "about:preferences" not in urls
         assert len(events) == 2
+        assert events[0].occurred_at == now.isoformat()
 
     def test_skips_internal_urls(self):
         from datetime import datetime, timezone
@@ -179,7 +183,8 @@ class TestBrowserCollector:
         from datetime import datetime, timezone
 
         chrome_offset_seconds = 11_644_473_600
-        now_us = int((datetime.now(timezone.utc).timestamp() + chrome_offset_seconds) * 1_000_000)
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        now_us = int((now.timestamp() + chrome_offset_seconds) * 1_000_000)
         with tempfile.TemporaryDirectory() as tmp:
             profile = Path(tmp) / "Default"
             profile.mkdir()
@@ -194,6 +199,7 @@ class TestBrowserCollector:
 
         kinds = {event.kind for event in events}
         assert kinds == {"youtube_visit", "history"}
+        assert events[0].occurred_at == now.isoformat()
 
     def test_chrome_skips_internal_urls(self):
         from datetime import datetime, timezone
@@ -235,6 +241,23 @@ class TestBrowserCollector:
 
         assert len(events) == 1
         assert events[0].url == "https://recent.com"
+
+    def test_redacts_browser_url_query_and_fragment(self):
+        rows = [{
+            "url": "http://localhost:1455/success?id_token=secret#frag",
+            "title": "Auth Callback",
+            "occurred_at": "2026-01-01T00:00:00+00:00",
+        }]
+        events = BrowserCollector()._history_events(rows)
+        assert events[0].url == "http://localhost:1455/success"
+
+
+class TestSanitizeBrowserUrl:
+    def test_strips_query_and_fragment(self):
+        assert sanitize_browser_url("https://example.com/a?token=secret#x") == "https://example.com/a"
+
+    def test_keeps_plain_url(self):
+        assert sanitize_browser_url("https://example.com/a") == "https://example.com/a"
 
     def test_chrome_history_copy_includes_wal_sidecars(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -532,7 +555,7 @@ class TestAppWindowCollector:
             ("0x02", "nemo-desktop"),
             ("0x03", "GitHub — Mozilla Firefox"),
         ]
-        collector._xdotool = lambda args: "0x03"
+        collector._active_window_id = lambda: "0x03"
         events = collector.collect()
         assert len(events) == 1
         assert events[0].title == "GitHub"
@@ -545,7 +568,7 @@ class TestAppWindowCollector:
             ("0x01", "ATHENA"),
             ("0x02", "Gmail - Google Chrome"),
         ]
-        collector._xdotool = lambda args: "0x02"
+        collector._active_window_id = lambda: "0x02"
         events = collector.collect()
         active = [e for e in events if e.metadata.get("active")]
         assert len(active) == 1
@@ -648,6 +671,17 @@ class TestParseSsPort:
         assert _parse_ss_port("no ports here") is None
 
 
+class TestParseEndpointPort:
+    def test_extracts_ipv4_port(self):
+        assert _parse_endpoint_port("127.0.0.1:5173") == 5173
+
+    def test_extracts_ipv6_port(self):
+        assert _parse_endpoint_port("[::]:3000") == 3000
+
+    def test_returns_none_on_junk(self):
+        assert _parse_endpoint_port("*:*") is None
+
+
 class TestParseSsProcess:
     def test_extracts_process_name(self):
         line = 'LISTEN 0  511  127.0.0.1:8080  0.0.0.0:*  users:(("node",pid=68738,fd=21))'
@@ -685,3 +719,18 @@ class TestSystemCollector:
         collector._run_ss = lambda: output
         services = collector._listening_ports()
         assert [service["port"] for service in services] == [3000, 3001]
+
+    def test_windows_listening_ports(self, monkeypatch):
+        class Result:
+            returncode = 0
+            stdout = (
+                "  TCP    127.0.0.1:5173    0.0.0.0:0    LISTENING    42\n"
+                "  TCP    [::]:3000         [::]:0       LISTENING    43\n"
+            )
+
+        monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: Result())
+        services = SystemCollector()._listening_ports_windows()
+        assert services == [
+            {"name": "vite", "type": "listener", "port": 5173, "pid": "42"},
+            {"name": "dev-server", "type": "listener", "port": 3000, "pid": "43"},
+        ]

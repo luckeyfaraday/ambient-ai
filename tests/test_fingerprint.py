@@ -32,10 +32,17 @@ def test_fingerprint_different_kind():
     assert make_fingerprint(a) != make_fingerprint(b)
 
 
-def test_fingerprint_truncated_to_512():
+def test_fingerprint_is_digest():
     long_title = "x" * 1000
     event = AmbientEvent(source="browser", kind="tab", title=long_title)
-    assert len(make_fingerprint(event)) == 512
+    assert len(make_fingerprint(event)) == 64
+
+
+def test_fingerprint_uses_full_key_before_hashing():
+    prefix = "x" * 600
+    a = AmbientEvent(source="browser", kind="tab", title=f"{prefix}a")
+    b = AmbientEvent(source="browser", kind="tab", title=f"{prefix}b")
+    assert make_fingerprint(a) != make_fingerprint(b)
 
 
 def test_fingerprint_no_url_matches_empty():

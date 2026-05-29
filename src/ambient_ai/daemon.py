@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -21,12 +22,22 @@ from .renderer import write_hermes_prompt
 COLLECTOR_NAMES = ("repo", "app", "browser", "terminal", "system")
 
 
+def default_collector_names() -> list[str]:
+    if sys.platform.startswith("linux"):
+        return list(COLLECTOR_NAMES)
+    if sys.platform == "darwin":
+        return ["repo", "browser", "terminal"]
+    if sys.platform == "win32":
+        return ["repo", "app", "browser", "system"]
+    return ["repo", "browser"]
+
+
 def build_collectors(
     repo_path: Path | None = None,
     enabled: Iterable[str] | None = None,
     disabled: Iterable[str] | None = None,
 ) -> list[Collector]:
-    enabled_names = normalize_collector_names(enabled) if enabled else list(COLLECTOR_NAMES)
+    enabled_names = normalize_collector_names(enabled) if enabled else default_collector_names()
     disabled_names = set(normalize_collector_names(disabled) if disabled else [])
     collectors: list[Collector] = []
     for name in enabled_names:

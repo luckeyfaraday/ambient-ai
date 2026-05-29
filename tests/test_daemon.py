@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 
 from ambient_ai.collectors import Collector
-from ambient_ai.daemon import build_collectors, normalize_collector_names, run_once
+from ambient_ai.daemon import (
+    build_collectors,
+    default_collector_names,
+    normalize_collector_names,
+    run_once,
+)
 from ambient_ai.events import AmbientEvent
 
 
@@ -36,6 +41,13 @@ class TestCollectorControls:
         assert "terminal" not in sources
         assert "browser" not in sources
         assert "repo" in sources
+
+    def test_default_collectors_are_platform_aware(self, monkeypatch):
+        monkeypatch.setattr("sys.platform", "win32")
+        assert default_collector_names() == ["repo", "app", "browser", "system"]
+
+        monkeypatch.setattr("sys.platform", "linux")
+        assert default_collector_names() == ["repo", "app", "browser", "terminal", "system"]
 
     def test_run_once_accepts_explicit_empty_collector_list(self, paths):
         inserted = run_once(paths, collectors=[])
