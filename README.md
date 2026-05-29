@@ -4,15 +4,18 @@ Ambient AI is a local-first context engine for proactive AI agents. It captures 
 
 Use Ambient AI when you want coding agents, research agents, or personal AI assistants to have fresh workspace context without streaming your whole screen into an LLM.
 
-Ambient AI is not the LLM decision-maker. Hermes, Codex, Claude Code, OpenCode, or another external agent reads the generated context, chooses action or no-action, and stays silent when there is nothing useful to do.
+Ambient AI is agent-agnostic. It exposes its context over the **Model Context Protocol (MCP)**, so *any* MCP-capable runtime — Claude Code, Hermes, Codex, OpenCode, or your own harness — can consume it without a bespoke adapter. Ambient owns the proactive/push primitive (continuous, compacted, diff-aware awareness); the agent owns reasoning and action, choosing work or no-action and staying silent when there is nothing useful to do.
+
+If models are layer one and agents are layer two, Ambient AI is the layer that lets agents *notice* — a vendor-neutral, local-first awareness substrate beneath any of them.
 
 ## What Ambient AI Does
 
 - Collects local activity metadata from repositories, windows, browser history, terminal history, system state, and other adapters.
 - Stores raw events in local SQLite.
 - Deduplicates, expires, and reduces events into compact context files.
-- Generates `context/hot.json`, `context/recent.md`, and `context/hermes-handoff.md`.
-- Provides agent work contracts and a Hermes skill stub for consuming Ambient context.
+- Computes a boundary-safe **diff** (what is new/gone since the last cycle) and **time-gap sessions** so consumers don't re-derive novelty every time.
+- Serves context to any agent over an **MCP server** (resources + write-back tools), in addition to `context/hot.json`, `context/recent.md`, and the Markdown handoff.
+- Records structured agent **outcomes** to seed a per-user learning loop.
 - Keeps reasoning outside the collector loop to avoid unnecessary LLM calls and token waste.
 
 ## Use Cases
@@ -34,12 +37,14 @@ Ambient AI is not the LLM decision-maker. Hermes, Codex, Claude Code, OpenCode, 
 ## Core Features
 
 - Local SQLite event log.
-- Deterministic reducers for dedupe, grouping, expiry, and compact Markdown/JSON context.
+- Deterministic reducers for dedupe, grouping, expiry, diffing, time-gap sessionization, and compact Markdown/JSON context.
+- MCP server (`ambient-ai mcp`) exposing context resources and `record_outcome` / `refresh` tools to any MCP client.
 - Repo collector for Git branch, head, dirty state, changed files, and latest commit.
 - Browser, window, terminal, and system collectors with daemon controls.
-- Terminal command redaction for common token, password, API key, and bearer-token patterns.
+- Local secret scanner for terminal history: provider token catalog (AWS, GitHub, Slack, Google, Stripe, OpenAI, JWT, PEM keys), assignment/flag/bearer patterns, and a conservative Shannon-entropy sweep. Fully local.
+- Structured append-only outcome log for the per-user learning loop.
 - Collector selection with `--collectors`, `--disable-collector`, `AMBIENT_AI_COLLECTORS`, and `AMBIENT_AI_DISABLE_COLLECTORS`.
-- Hermes handoff prompt and `hermes-ambient-ai` skill contract.
+- Hermes handoff prompt and `hermes-ambient-ai` skill contract (one consumer among many).
 
 ## MVP Contents
 
@@ -54,11 +59,43 @@ Ambient AI is not the LLM decision-maker. Hermes, Codex, Claude Code, OpenCode, 
 
 ## Generated Context Files
 
-- `context/hot.json`: machine-readable recent context grouped by source.
-- `context/recent.md`: human-readable recent activity summary.
-- `context/hermes-handoff.md`: handoff prompt for Hermes or another external agent runtime.
+- `context/hot.json`: machine-readable recent context. Includes `by_source` grouping, `sessions` (time-gap groups), `diff` (new/gone since the previous cycle), and `recent_refs`.
+- `context/recent.md`: human-readable recent activity summary, with a "Since last cycle" section.
+- `context/hermes-handoff.md`: Markdown handoff prompt for Hermes or another external agent runtime.
 - `context/learning/preferences.md`: explicit preferences and policy notes.
-- `context/learning/trigger-outcomes.jsonl`: append-only feedback and outcome history.
+- `context/learning/trigger-outcomes.jsonl`: append-only structured outcome history (decision, summary, agent, evidence, event ids).
+- `data/prev-snapshot.json`: internal previous-cycle fingerprint snapshot used to compute the diff.
+
+## MCP Server
+
+Ambient speaks MCP so any MCP-capable agent can read context and write outcomes back without a custom integration. Install the optional extra and run the server over stdio:
+
+```bash
+pip install -e '.[mcp]'
+AMBIENT_AI_HOME=/path/to/workspace ambient-ai mcp
+# or from a checkout:
+AMBIENT_AI_HOME=/path/to/workspace PYTHONPATH=src python3 -m ambient_ai mcp
+```
+
+Resources: `ambient://hot`, `ambient://recent`, `ambient://sessions`, `ambient://diff`, `ambient://preferences`, `ambient://outcomes`.
+
+Tools: `record_outcome(decision, summary, agent, evidence, event_ids)` and `refresh(repo)`.
+
+Example MCP client config (e.g. Claude Code's `mcpServers`):
+
+```json
+{
+  "mcpServers": {
+    "ambient-ai": {
+      "command": "ambient-ai",
+      "args": ["mcp"],
+      "env": { "AMBIENT_AI_HOME": "/path/to/workspace" }
+    }
+  }
+}
+```
+
+Keep a daemon running (`ambient-ai daemon --interval 300`) so the served context stays fresh, or call the `refresh` tool from the agent.
 
 ## Tests
 
@@ -81,6 +118,9 @@ PYTHONPATH=src python3 -m ambient_ai reduce
 PYTHONPATH=src python3 -m ambient_ai render-hermes
 PYTHONPATH=src python3 -m ambient_ai daemon --once --repo /path/to/repo
 PYTHONPATH=src python3 -m ambient_ai daemon --once --collectors repo,system
+PYTHONPATH=src python3 -m ambient_ai record-outcome done --summary "drafted viability note" --agent hermes
+PYTHONPATH=src python3 -m ambient_ai show-outcomes --limit 20
+PYTHONPATH=src python3 -m ambient_ai mcp
 ```
 
 Set `AMBIENT_AI_HOME=/path/to/workspace` to write context and data somewhere other than the current directory.

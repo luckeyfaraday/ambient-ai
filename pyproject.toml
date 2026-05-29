@@ -15,6 +15,9 @@ build-backend = "setuptools.build_meta"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# The capture core is zero-dependency; the MCP server is opt-in so Ambient can
+# speak Model Context Protocol to any MCP-capable agent runtime.
+mcp = ["mcp>=1.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
