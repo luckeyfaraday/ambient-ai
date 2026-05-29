@@ -3,7 +3,6 @@ from __future__ import annotations
 import ctypes
 import os
 import platform
-import re
 import shutil
 import sqlite3
 import subprocess
@@ -15,6 +14,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from .events import AmbientEvent
+from .redaction import redact_command  # re-exported for backward compatibility
 
 
 class Collector:
@@ -36,13 +36,6 @@ _NOISE_HOST_SUFFIXES = (
     "oauth2.googleapis.com",
 )
 _NOISE_PATH_SEGMENTS = frozenset({"oauth", "oauth2", "sso"})
-_SECRET_ENV_PATTERN = re.compile(
-    r"(?i)\b([A-Z0-9_]*(?:TOKEN|API_KEY|SECRET|PASSWORD|PASSWD|PRIVATE_KEY)[A-Z0-9_]*)=([^\s]+)"
-)
-_SECRET_FLAG_PATTERN = re.compile(
-    r"(?i)(--(?:token|api-key|secret|password|passwd|private-key)(?:=|\s+))([^\s]+)"
-)
-_BEARER_PATTERN = re.compile(r"(?i)(Authorization:\s*Bearer\s+)([^\s'\"\\]+)")
 _CHROMIUM_BROWSERS = {"chrome", "chromium", "edge", "brave", "vivaldi", "opera"}
 
 
@@ -656,13 +649,6 @@ def _clean_history_line(line: str) -> str:
     if line.startswith(": ") and ";" in line:
         line = line.split(";", 1)[1]
     return line.strip()
-
-
-def redact_command(command: str) -> str:
-    command = _SECRET_ENV_PATTERN.sub(r"\1=[REDACTED]", command)
-    command = _SECRET_FLAG_PATTERN.sub(r"\1[REDACTED]", command)
-    command = _BEARER_PATTERN.sub(r"\1[REDACTED]", command)
-    return command
 
 
 _KNOWN_PORTS: dict[int, str] = {
