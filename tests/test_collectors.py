@@ -16,6 +16,7 @@ from ambient_ai.collectors import (
     _parse_ss_process,
     _parse_wmctrl,
     copy_sqlite_database,
+    is_low_signal_url,
     parse_status_files,
     parse_window_title,
     redact_command,
@@ -313,6 +314,49 @@ class TestBrowserDetection:
         collector._find_firefox_profile = lambda: None
         collector._find_chrome_history = lambda: None
         assert collector._detect_by_recency() is None
+
+
+class TestLowSignalUrl:
+    def test_auth_hosts_are_noise(self):
+        assert is_low_signal_url("https://accounts.google.com/o/oauth2/auth?foo=bar")
+        assert is_low_signal_url("https://login.microsoftonline.com/common/oauth2/authorize")
+        assert is_low_signal_url("https://oauth2.googleapis.com/token")
+
+    def test_oauth_path_segments_are_noise(self):
+        assert is_low_signal_url("https://github.com/login/oauth/authorize")
+        assert is_low_signal_url("https://example.com/sso/start")
+
+    def test_content_urls_are_kept(self):
+        assert not is_low_signal_url("https://github.com/foo/bar")
+        assert not is_low_signal_url("https://news.ycombinator.com/item?id=123")
+        assert not is_low_signal_url("https://youtu.be/abc123")
+
+    def test_search_queries_are_kept(self):
+        # SERPs carry user intent in the query string; Hermes decides, not Ambient.
+        assert not is_low_signal_url("https://www.google.com/search?q=react+suspense")
+        assert not is_low_signal_url("https://duckduckgo.com/?q=sqlite+wal")
+
+    def test_login_substring_is_not_dropped(self):
+        # 'login' as a path segment alone is not auth plumbing (e.g. a repo named login).
+        assert not is_low_signal_url("https://github.com/acme/login-service")
+
+    def test_filters_through_collect(self):
+        from datetime import datetime, timezone
+
+        now_us = int(datetime.now(timezone.utc).timestamp() * 1_000_000)
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp) / "test.default"
+            profile.mkdir()
+            _make_firefox_places(profile, [
+                ("https://accounts.google.com/o/oauth2/auth", "Sign in", now_us),
+                ("https://github.com/foo/bar", "Real Page", now_us),
+            ])
+            collector = BrowserCollector(since_minutes=5, browser="firefox")
+            collector._find_firefox_profile = lambda: profile
+            events = collector.collect()
+
+        urls = {e.url for e in events}
+        assert urls == {"https://github.com/foo/bar"}
 
 
 class TestParseWindowTitle:

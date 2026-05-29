@@ -10,6 +10,7 @@ from contextlib import closing
 from hashlib import sha1
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .events import AmbientEvent
 
@@ -23,6 +24,16 @@ class Collector:
 
 _SKIP_SCHEMES = ("about:", "moz-extension:", "chrome:", "chrome-extension:", "file:")
 _CHROME_EPOCH_OFFSET_SECONDS = 11_644_473_600
+# Auth/SSO hosts and path segments that are pure navigational plumbing, never user
+# intent. Kept deliberately narrow: search queries and content pages are left for
+# Hermes to judge, not dropped here.
+_NOISE_HOST_SUFFIXES = (
+    "accounts.google.com",
+    "login.microsoftonline.com",
+    "login.live.com",
+    "oauth2.googleapis.com",
+)
+_NOISE_PATH_SEGMENTS = frozenset({"oauth", "oauth2", "sso"})
 _SECRET_ENV_PATTERN = re.compile(
     r"(?i)\b([A-Z0-9_]*(?:TOKEN|API_KEY|SECRET|PASSWORD|PASSWD|PRIVATE_KEY)[A-Z0-9_]*)=([^\s]+)"
 )
@@ -173,6 +184,8 @@ class BrowserCollector(Collector):
                 continue
             if any(url.startswith(s) for s in _SKIP_SCHEMES):
                 continue
+            if is_low_signal_url(url):
+                continue
             is_youtube = "youtube.com/watch" in url or "youtu.be/" in url
             events.append(
                 AmbientEvent(
@@ -237,6 +250,20 @@ class BrowserCollector(Collector):
                 ]
             )
         return [root for root in roots if root.exists()]
+
+
+def is_low_signal_url(url: str) -> bool:
+    """True for mechanical navigation (auth/SSO redirects) that carries no user intent.
+
+    Deliberately narrow so Ambient stays a substrate: search queries and content
+    pages are kept and left for Hermes to judge.
+    """
+    parts = urlsplit(url)
+    host = parts.netloc.lower()
+    if any(host == suffix or host.endswith("." + suffix) for suffix in _NOISE_HOST_SUFFIXES):
+        return True
+    segments = {seg for seg in parts.path.lower().split("/") if seg}
+    return bool(segments & _NOISE_PATH_SEGMENTS)
 
 
 def copy_sqlite_database(source: Path, destination: Path) -> Path:
