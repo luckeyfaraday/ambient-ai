@@ -41,6 +41,7 @@ _SECRET_FLAG_PATTERN = re.compile(
     r"(?i)(--(?:token|api-key|secret|password|passwd|private-key)(?:=|\s+))([^\s]+)"
 )
 _BEARER_PATTERN = re.compile(r"(?i)(Authorization:\s*Bearer\s+)([^\s'\"\\]+)")
+_CHROMIUM_BROWSERS = {"chrome", "chromium", "edge", "brave", "vivaldi", "opera"}
 
 
 class BrowserCollector(Collector):
@@ -54,8 +55,8 @@ class BrowserCollector(Collector):
         browser = self.browser or self._choose_browser()
         if browser == "firefox":
             return self._collect_firefox()
-        if browser == "chrome":
-            return self._collect_chrome()
+        if browser in _CHROMIUM_BROWSERS:
+            return self._collect_chrome(browser)
         return []
 
     def _choose_browser(self) -> str | None:
@@ -82,21 +83,31 @@ class BrowserCollector(Collector):
         name = desktop.lower()
         if "firefox" in name or "librewolf" in name or "waterfox" in name:
             return "firefox"
-        if any(k in name for k in ("chrome", "chromium", "edge", "brave", "vivaldi", "opera")):
+        if "brave" in name:
+            return "brave"
+        if "vivaldi" in name:
+            return "vivaldi"
+        if "opera" in name:
+            return "opera"
+        if "edge" in name:
+            return "edge"
+        if "chromium" in name:
+            return "chromium"
+        if "chrome" in name:
             return "chrome"
         return None
 
     def _detect_by_recency(self) -> str | None:
         firefox_mtime = self._mtime_or_none(self._find_firefox_profile(), "places.sqlite")
-        chrome_history = self._find_chrome_history()
-        chrome_mtime = self._mtime_or_none(chrome_history) if chrome_history else None
-        if firefox_mtime is None and chrome_mtime is None:
+        chromium = self._find_chrome_history_with_browser()
+        chromium_mtime = self._mtime_or_none(chromium[1]) if chromium else None
+        if firefox_mtime is None and chromium_mtime is None:
             return None
-        if chrome_mtime is None:
+        if chromium_mtime is None:
             return "firefox"
         if firefox_mtime is None:
-            return "chrome"
-        return "firefox" if firefox_mtime >= chrome_mtime else "chrome"
+            return chromium[0] if chromium else None
+        return "firefox" if firefox_mtime >= chromium_mtime else chromium[0]
 
     @staticmethod
     def _mtime_or_none(path: Path | None, child: str | None = None) -> float | None:
@@ -140,8 +151,8 @@ class BrowserCollector(Collector):
             return []
         return self._history_events(rows)
 
-    def _collect_chrome(self) -> list[AmbientEvent]:
-        db_path = self._find_chrome_history()
+    def _collect_chrome(self, browser: str = "chrome") -> list[AmbientEvent]:
+        db_path = self._find_chrome_history(browser)
         if not db_path or not db_path.exists():
             return []
         cutoff_chrome_us = int(
@@ -219,37 +230,99 @@ class BrowserCollector(Collector):
                 best = p
         return best
 
-    def _find_chrome_history(self) -> Path | None:
-        candidates = [
-            path
-            for root in self._chrome_roots()
-            for path in root.glob("*/History")
-            if path.exists()
-        ]
+    def _find_chrome_history(self, browser: str | None = None) -> Path | None:
+        candidates = [path for _, path in self._chrome_history_candidates(browser)]
         if not candidates:
             return None
         return max(candidates, key=lambda path: path.stat().st_mtime)
 
-    def _chrome_roots(self) -> list[Path]:
-        home = Path.home()
-        roots = [
-            home / ".config" / "google-chrome",
-            home / ".config" / "chromium",
-            home / ".config" / "microsoft-edge",
-            home / "Library" / "Application Support" / "Google" / "Chrome",
-            home / "Library" / "Application Support" / "Chromium",
-            home / "Library" / "Application Support" / "Microsoft Edge",
+    def _find_chrome_history_with_browser(self) -> tuple[str, Path] | None:
+        candidates = self._chrome_history_candidates()
+        if not candidates:
+            return None
+        return max(candidates, key=lambda candidate: candidate[1].stat().st_mtime)
+
+    def _chrome_history_candidates(
+        self,
+        browser: str | None = None,
+    ) -> list[tuple[str, Path]]:
+        return [
+            (root_browser, path)
+            for root_browser, root in self._chrome_roots_with_browser(browser)
+            for path in root.glob("*/History")
+            if path.exists()
         ]
+
+    def _chrome_roots(self, browser: str | None = None) -> list[Path]:
+        return [root for _, root in self._chrome_roots_with_browser(browser)]
+
+    def _chrome_roots_with_browser(
+        self,
+        browser: str | None = None,
+    ) -> list[tuple[str, Path]]:
+        home = Path.home()
+        roots_by_browser = {
+            "chrome": [
+                home / ".config" / "google-chrome",
+                home / "Library" / "Application Support" / "Google" / "Chrome",
+            ],
+            "chromium": [
+                home / ".config" / "chromium",
+                home / "Library" / "Application Support" / "Chromium",
+            ],
+            "edge": [
+                home / ".config" / "microsoft-edge",
+                home / "Library" / "Application Support" / "Microsoft Edge",
+            ],
+            "brave": [
+                home / ".config" / "BraveSoftware" / "Brave-Browser",
+                home
+                / "Library"
+                / "Application Support"
+                / "BraveSoftware"
+                / "Brave-Browser",
+            ],
+            "vivaldi": [
+                home / ".config" / "vivaldi",
+                home / "Library" / "Application Support" / "Vivaldi",
+            ],
+            "opera": [
+                home / ".config" / "opera",
+                home / "Library" / "Application Support" / "com.operasoftware.Opera",
+            ],
+        }
         local_app_data = os.environ.get("LOCALAPPDATA")
         if local_app_data:
-            roots.extend(
-                [
-                    Path(local_app_data) / "Google" / "Chrome" / "User Data",
-                    Path(local_app_data) / "Chromium" / "User Data",
-                    Path(local_app_data) / "Microsoft" / "Edge" / "User Data",
-                ]
+            roots_by_browser["chrome"].append(
+                Path(local_app_data) / "Google" / "Chrome" / "User Data"
             )
-        return [root for root in roots if root.exists()]
+            roots_by_browser["chromium"].append(
+                Path(local_app_data) / "Chromium" / "User Data"
+            )
+            roots_by_browser["edge"].append(
+                Path(local_app_data) / "Microsoft" / "Edge" / "User Data"
+            )
+            roots_by_browser["brave"].append(
+                Path(local_app_data) / "BraveSoftware" / "Brave-Browser" / "User Data"
+            )
+            roots_by_browser["vivaldi"].append(
+                Path(local_app_data) / "Vivaldi" / "User Data"
+            )
+        app_data = os.environ.get("APPDATA")
+        if app_data:
+            roots_by_browser["opera"].append(
+                Path(app_data) / "Opera Software" / "Opera Stable"
+            )
+        if browser:
+            browsers = [browser]
+        else:
+            browsers = list(roots_by_browser)
+        return [
+            (name, root)
+            for name in browsers
+            for root in roots_by_browser.get(name, [])
+            if root.exists()
+        ]
 
 
 def is_low_signal_url(url: str) -> bool:
