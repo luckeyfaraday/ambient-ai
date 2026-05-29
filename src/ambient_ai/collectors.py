@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ctypes
 import os
+import platform
 import shutil
 import sqlite3
 import subprocess
@@ -9,6 +11,7 @@ from contextlib import closing
 from hashlib import sha1
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from .events import AmbientEvent
 from .redaction import redact_command  # re-exported for backward compatibility
@@ -23,6 +26,17 @@ class Collector:
 
 _SKIP_SCHEMES = ("about:", "moz-extension:", "chrome:", "chrome-extension:", "file:")
 _CHROME_EPOCH_OFFSET_SECONDS = 11_644_473_600
+# Auth/SSO hosts and path segments that are pure navigational plumbing, never user
+# intent. Kept deliberately narrow: search queries and content pages are left for
+# Hermes to judge, not dropped here.
+_NOISE_HOST_SUFFIXES = (
+    "accounts.google.com",
+    "login.microsoftonline.com",
+    "login.live.com",
+    "oauth2.googleapis.com",
+)
+_NOISE_PATH_SEGMENTS = frozenset({"oauth", "oauth2", "sso"})
+_CHROMIUM_BROWSERS = {"chrome", "chromium", "edge", "brave", "vivaldi", "opera"}
 
 
 class BrowserCollector(Collector):
@@ -36,8 +50,8 @@ class BrowserCollector(Collector):
         browser = self.browser or self._choose_browser()
         if browser == "firefox":
             return self._collect_firefox()
-        if browser == "chrome":
-            return self._collect_chrome()
+        if browser in _CHROMIUM_BROWSERS:
+            return self._collect_chrome(browser)
         return []
 
     def _choose_browser(self) -> str | None:
@@ -64,21 +78,31 @@ class BrowserCollector(Collector):
         name = desktop.lower()
         if "firefox" in name or "librewolf" in name or "waterfox" in name:
             return "firefox"
-        if any(k in name for k in ("chrome", "chromium", "edge", "brave", "vivaldi", "opera")):
+        if "brave" in name:
+            return "brave"
+        if "vivaldi" in name:
+            return "vivaldi"
+        if "opera" in name:
+            return "opera"
+        if "edge" in name:
+            return "edge"
+        if "chromium" in name:
+            return "chromium"
+        if "chrome" in name:
             return "chrome"
         return None
 
     def _detect_by_recency(self) -> str | None:
         firefox_mtime = self._mtime_or_none(self._find_firefox_profile(), "places.sqlite")
-        chrome_history = self._find_chrome_history()
-        chrome_mtime = self._mtime_or_none(chrome_history) if chrome_history else None
-        if firefox_mtime is None and chrome_mtime is None:
+        chromium = self._find_chrome_history_with_browser()
+        chromium_mtime = self._mtime_or_none(chromium[1]) if chromium else None
+        if firefox_mtime is None and chromium_mtime is None:
             return None
-        if chrome_mtime is None:
+        if chromium_mtime is None:
             return "firefox"
         if firefox_mtime is None:
-            return "chrome"
-        return "firefox" if firefox_mtime >= chrome_mtime else "chrome"
+            return chromium[0] if chromium else None
+        return "firefox" if firefox_mtime >= chromium_mtime else chromium[0]
 
     @staticmethod
     def _mtime_or_none(path: Path | None, child: str | None = None) -> float | None:
@@ -105,7 +129,11 @@ class BrowserCollector(Collector):
             with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)) as conn:
                 conn.row_factory = sqlite3.Row
                 rows = [
-                    {"url": row["url"], "title": row["title"]}
+                    {
+                        "url": row["url"],
+                        "title": row["title"],
+                        "occurred_at": self._firefox_time_iso(row["visit_date"]),
+                    }
                     for row in conn.execute(
                         """
                         SELECT p.url, p.title, v.visit_date
@@ -122,8 +150,8 @@ class BrowserCollector(Collector):
             return []
         return self._history_events(rows)
 
-    def _collect_chrome(self) -> list[AmbientEvent]:
-        db_path = self._find_chrome_history()
+    def _collect_chrome(self, browser: str = "chrome") -> list[AmbientEvent]:
+        db_path = self._find_chrome_history(browser)
         if not db_path or not db_path.exists():
             return []
         cutoff_chrome_us = int(
@@ -140,7 +168,11 @@ class BrowserCollector(Collector):
                 with closing(sqlite3.connect(history_copy, timeout=2)) as conn:
                     conn.row_factory = sqlite3.Row
                     rows = [
-                        {"url": row["url"], "title": row["title"]}
+                        {
+                            "url": row["url"],
+                            "title": row["title"],
+                            "occurred_at": self._chrome_time_iso(row["last_visit_time"]),
+                        }
                         for row in conn.execute(
                             """
                             SELECT url, title, last_visit_time
@@ -156,24 +188,36 @@ class BrowserCollector(Collector):
             return []
         return self._history_events(rows)
 
-    def _history_events(self, rows: list[dict[str, str | None]]) -> list[AmbientEvent]:
+    @staticmethod
+    def _firefox_time_iso(visit_date_us: int) -> str:
+        return datetime.fromtimestamp(visit_date_us / 1_000_000, timezone.utc).isoformat()
+
+    @staticmethod
+    def _chrome_time_iso(last_visit_time_us: int) -> str:
+        timestamp = (last_visit_time_us / 1_000_000) - _CHROME_EPOCH_OFFSET_SECONDS
+        return datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
+
+    def _history_events(self, rows: list[dict[str, object]]) -> list[AmbientEvent]:
         now = datetime.now(timezone.utc).isoformat()
         events: list[AmbientEvent] = []
         for row in rows:
-            url = row["url"] or ""
-            title = row["title"] or ""
+            url = sanitize_browser_url(str(row["url"] or ""))
+            title = str(row["title"] or "")
             if not title or not url:
                 continue
             if any(url.startswith(s) for s in _SKIP_SCHEMES):
                 continue
+            if is_low_signal_url(url):
+                continue
             is_youtube = "youtube.com/watch" in url or "youtu.be/" in url
+            occurred_at = row.get("occurred_at")
             events.append(
                 AmbientEvent(
                     source=self.source,
                     kind="youtube_visit" if is_youtube else "history",
                     title=title,
                     url=url,
-                    occurred_at=now,
+                    occurred_at=str(occurred_at or now),
                 )
             )
         return events
@@ -199,37 +243,113 @@ class BrowserCollector(Collector):
                 best = p
         return best
 
-    def _find_chrome_history(self) -> Path | None:
-        candidates = [
-            path
-            for root in self._chrome_roots()
-            for path in root.glob("*/History")
-            if path.exists()
-        ]
+    def _find_chrome_history(self, browser: str | None = None) -> Path | None:
+        candidates = [path for _, path in self._chrome_history_candidates(browser)]
         if not candidates:
             return None
         return max(candidates, key=lambda path: path.stat().st_mtime)
 
-    def _chrome_roots(self) -> list[Path]:
-        home = Path.home()
-        roots = [
-            home / ".config" / "google-chrome",
-            home / ".config" / "chromium",
-            home / ".config" / "microsoft-edge",
-            home / "Library" / "Application Support" / "Google" / "Chrome",
-            home / "Library" / "Application Support" / "Chromium",
-            home / "Library" / "Application Support" / "Microsoft Edge",
+    def _find_chrome_history_with_browser(self) -> tuple[str, Path] | None:
+        candidates = self._chrome_history_candidates()
+        if not candidates:
+            return None
+        return max(candidates, key=lambda candidate: candidate[1].stat().st_mtime)
+
+    def _chrome_history_candidates(
+        self,
+        browser: str | None = None,
+    ) -> list[tuple[str, Path]]:
+        return [
+            (root_browser, path)
+            for root_browser, root in self._chrome_roots_with_browser(browser)
+            for path in root.glob("*/History")
+            if path.exists()
         ]
+
+    def _chrome_roots(self, browser: str | None = None) -> list[Path]:
+        return [root for _, root in self._chrome_roots_with_browser(browser)]
+
+    def _chrome_roots_with_browser(
+        self,
+        browser: str | None = None,
+    ) -> list[tuple[str, Path]]:
+        home = Path.home()
+        roots_by_browser = {
+            "chrome": [
+                home / ".config" / "google-chrome",
+                home / "Library" / "Application Support" / "Google" / "Chrome",
+            ],
+            "chromium": [
+                home / ".config" / "chromium",
+                home / "Library" / "Application Support" / "Chromium",
+            ],
+            "edge": [
+                home / ".config" / "microsoft-edge",
+                home / "Library" / "Application Support" / "Microsoft Edge",
+            ],
+            "brave": [
+                home / ".config" / "BraveSoftware" / "Brave-Browser",
+                home
+                / "Library"
+                / "Application Support"
+                / "BraveSoftware"
+                / "Brave-Browser",
+            ],
+            "vivaldi": [
+                home / ".config" / "vivaldi",
+                home / "Library" / "Application Support" / "Vivaldi",
+            ],
+            "opera": [
+                home / ".config" / "opera",
+                home / "Library" / "Application Support" / "com.operasoftware.Opera",
+            ],
+        }
         local_app_data = os.environ.get("LOCALAPPDATA")
         if local_app_data:
-            roots.extend(
-                [
-                    Path(local_app_data) / "Google" / "Chrome" / "User Data",
-                    Path(local_app_data) / "Chromium" / "User Data",
-                    Path(local_app_data) / "Microsoft" / "Edge" / "User Data",
-                ]
+            roots_by_browser["chrome"].append(
+                Path(local_app_data) / "Google" / "Chrome" / "User Data"
             )
-        return [root for root in roots if root.exists()]
+            roots_by_browser["chromium"].append(
+                Path(local_app_data) / "Chromium" / "User Data"
+            )
+            roots_by_browser["edge"].append(
+                Path(local_app_data) / "Microsoft" / "Edge" / "User Data"
+            )
+            roots_by_browser["brave"].append(
+                Path(local_app_data) / "BraveSoftware" / "Brave-Browser" / "User Data"
+            )
+            roots_by_browser["vivaldi"].append(
+                Path(local_app_data) / "Vivaldi" / "User Data"
+            )
+        app_data = os.environ.get("APPDATA")
+        if app_data:
+            roots_by_browser["opera"].append(
+                Path(app_data) / "Opera Software" / "Opera Stable"
+            )
+        if browser:
+            browsers = [browser]
+        else:
+            browsers = list(roots_by_browser)
+        return [
+            (name, root)
+            for name in browsers
+            for root in roots_by_browser.get(name, [])
+            if root.exists()
+        ]
+
+
+def is_low_signal_url(url: str) -> bool:
+    """True for mechanical navigation (auth/SSO redirects) that carries no user intent.
+
+    Deliberately narrow so Ambient stays a substrate: search queries and content
+    pages are kept and left for Hermes to judge.
+    """
+    parts = urlsplit(url)
+    host = parts.netloc.lower()
+    if any(host == suffix or host.endswith("." + suffix) for suffix in _NOISE_HOST_SUFFIXES):
+        return True
+    segments = {seg for seg in parts.path.lower().split("/") if seg}
+    return bool(segments & _NOISE_PATH_SEGMENTS)
 
 
 def copy_sqlite_database(source: Path, destination: Path) -> Path:
@@ -240,6 +360,14 @@ def copy_sqlite_database(source: Path, destination: Path) -> Path:
         if sidecar.exists():
             shutil.copy2(sidecar, Path(f"{destination}{suffix}"))
     return destination
+
+
+def sanitize_browser_url(url: str) -> str:
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
 
 class VideoCollector(Collector):
@@ -288,7 +416,7 @@ class AppWindowCollector(Collector):
 
     def collect(self) -> list[AmbientEvent]:
         windows = self._list_windows()
-        active_wid = self._xdotool(["getactivewindow"])
+        active_wid = self._active_window_id()
         now = datetime.now(timezone.utc).isoformat()
         events: list[AmbientEvent] = []
         for wid, raw_title in windows:
@@ -312,6 +440,8 @@ class AppWindowCollector(Collector):
         return events
 
     def _list_windows(self) -> list[tuple[str, str]]:
+        if os.name == "nt":
+            return _list_windows_win32()
         output = self._run_cmd(["wmctrl", "-l"])
         if output is not None:
             return _parse_wmctrl(output)
@@ -320,6 +450,11 @@ class AppWindowCollector(Collector):
             wid = self._xdotool(["getactivewindow"]) or "0"
             return [(wid, title)]
         return []
+
+    def _active_window_id(self) -> str | None:
+        if os.name == "nt":
+            return _active_window_id_win32()
+        return self._xdotool(["getactivewindow"])
 
     def _xdotool(self, args: list[str]) -> str | None:
         return self._run_cmd(["xdotool", *args])
@@ -349,6 +484,40 @@ def _parse_wmctrl(output: str) -> list[tuple[str, str]]:
         wid = parts[0]
         title = parts[3]
         windows.append((wid, title))
+    return windows
+
+
+def _active_window_id_win32() -> str | None:
+    try:
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+    except AttributeError:
+        return None
+    return str(hwnd) if hwnd else None
+
+
+def _list_windows_win32() -> list[tuple[str, str]]:
+    try:
+        user32 = ctypes.windll.user32
+    except AttributeError:
+        return []
+
+    windows: list[tuple[str, str]] = []
+
+    def callback(hwnd: int, _lparam: int) -> bool:
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buffer, length + 1)
+        title = buffer.value.strip()
+        if title:
+            windows.append((str(hwnd), title))
+        return True
+
+    enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)(callback)
+    user32.EnumWindows(enum_proc, 0)
     return windows
 
 
@@ -533,6 +702,8 @@ class SystemCollector(Collector):
         return events
 
     def _hardware_profile(self) -> dict[str, object] | None:
+        if os.name == "nt":
+            return self._hardware_profile_windows()
         cpu = self._read_cpu()
         mem = self._read_mem()
         gpu = self._read_gpu()
@@ -555,6 +726,29 @@ class SystemCollector(Collector):
             profile["mem"] = mem
         if gpu:
             profile["gpu"] = gpu
+        if disk:
+            profile["disk"] = disk
+        return profile
+
+    def _hardware_profile_windows(self) -> dict[str, object] | None:
+        cpu = platform.processor() or platform.machine()
+        cores = os.cpu_count() or 0
+        mem = _windows_total_memory()
+        disk = _disk_summary()
+        parts = []
+        if cpu:
+            parts.append(f"{cpu} ({cores} cores)")
+        if mem:
+            parts.append(mem)
+        if disk:
+            parts.append(disk)
+        if not parts:
+            return None
+        profile: dict[str, object] = {"summary": " | ".join(parts)}
+        if cpu:
+            profile["cpu"] = f"{cpu} ({cores} cores)"
+        if mem:
+            profile["mem"] = mem
         if disk:
             profile["disk"] = disk
         return profile
@@ -593,7 +787,7 @@ class SystemCollector(Collector):
                 ["lspci"], capture_output=True, text=True, check=False, timeout=3,
             )
         except (OSError, subprocess.TimeoutExpired):
-            return []
+            return ""
         if result.returncode != 0:
             return ""
         for line in result.stdout.splitlines():
@@ -622,7 +816,10 @@ class SystemCollector(Collector):
     def _running_services(self) -> list[dict[str, object]]:
         services: list[dict[str, object]] = []
         services.extend(self._docker_containers())
-        services.extend(self._listening_ports())
+        if os.name == "nt":
+            services.extend(self._listening_ports_windows())
+        else:
+            services.extend(self._listening_ports())
         return services
 
     def _docker_containers(self) -> list[dict[str, object]]:
@@ -632,7 +829,7 @@ class SystemCollector(Collector):
                 capture_output=True, text=True, check=False, timeout=5,
             )
         except (OSError, subprocess.TimeoutExpired):
-            return ""
+            return []
         if result.returncode != 0:
             return []
         containers: list[dict[str, object]] = []
@@ -646,6 +843,37 @@ class SystemCollector(Collector):
                     "status": parts[2] if len(parts) >= 3 else "",
                 })
         return containers
+
+    def _listening_ports_windows(self) -> list[dict[str, object]]:
+        try:
+            result = subprocess.run(
+                ["netstat", "-ano", "-p", "tcp"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        if result.returncode != 0:
+            return []
+        services: list[dict[str, object]] = []
+        seen_ports: set[int] = set()
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 5 or parts[0].lower() != "tcp" or parts[3].upper() != "LISTENING":
+                continue
+            port = _parse_endpoint_port(parts[1])
+            if port is None or port in seen_ports:
+                continue
+            seen_ports.add(port)
+            services.append({
+                "name": _KNOWN_PORTS.get(port, f"port-{port}"),
+                "type": "listener",
+                "port": port,
+                "pid": parts[4],
+            })
+        return services
 
     def _listening_ports(self) -> list[dict[str, object]]:
         output = self._run_ss()
@@ -691,12 +919,57 @@ def _parse_ss_port(line: str) -> int | None:
     return None
 
 
+def _parse_endpoint_port(endpoint: str) -> int | None:
+    port_str = endpoint.rsplit(":", 1)[-1].strip("[]")
+    if port_str.isdigit():
+        port = int(port_str)
+        if port > 0:
+            return port
+    return None
+
+
 def _parse_ss_process(line: str) -> str:
     if 'users:(("' in line:
         start = line.index('users:(("') + 9
         end = line.index('"', start)
         return line[start:end]
     return ""
+
+
+class _MemoryStatusEx(ctypes.Structure):
+    _fields_ = [
+        ("dwLength", ctypes.c_ulong),
+        ("dwMemoryLoad", ctypes.c_ulong),
+        ("ullTotalPhys", ctypes.c_ulonglong),
+        ("ullAvailPhys", ctypes.c_ulonglong),
+        ("ullTotalPageFile", ctypes.c_ulonglong),
+        ("ullAvailPageFile", ctypes.c_ulonglong),
+        ("ullTotalVirtual", ctypes.c_ulonglong),
+        ("ullAvailVirtual", ctypes.c_ulonglong),
+        ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+    ]
+
+
+def _windows_total_memory() -> str:
+    try:
+        status = _MemoryStatusEx()
+        status.dwLength = ctypes.sizeof(status)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return ""
+    except AttributeError:
+        return ""
+    gb = round(status.ullTotalPhys / 1024 / 1024 / 1024, 1)
+    return f"{gb}GB RAM"
+
+
+def _disk_summary() -> str:
+    try:
+        usage = shutil.disk_usage(Path.cwd().anchor or Path.cwd())
+    except OSError:
+        return ""
+    free = round(usage.free / 1024 / 1024 / 1024, 1)
+    total = round(usage.total / 1024 / 1024 / 1024, 1)
+    return f"{free}GB free / {total}GB disk"
 
 
 class VoiceCollector(Collector):

@@ -5,6 +5,7 @@ import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -149,4 +150,4 @@ class EventStore:
 
 def make_fingerprint(event: AmbientEvent) -> str:
     key = "|".join([event.source, event.kind, event.title.lower(), event.url or ""])
-    return key[:512]
+    return sha256(key.encode("utf-8")).hexdigest()
