@@ -17,6 +17,7 @@ from ambient_ai.collectors import (
     _parse_endpoint_port,
     _parse_wmctrl,
     copy_sqlite_database,
+    is_low_signal_url,
     parse_status_files,
     parse_window_title,
     redact_command,
@@ -193,7 +194,7 @@ class TestBrowserCollector:
             ])
             collector = BrowserCollector(since_minutes=5, browser="chrome")
             collector._find_firefox_profile = lambda: None
-            collector._find_chrome_history = lambda: profile / "History"
+            collector._find_chrome_history = lambda browser=None: profile / "History"
             events = collector.collect()
 
         kinds = {event.kind for event in events}
@@ -215,7 +216,7 @@ class TestBrowserCollector:
             ])
             collector = BrowserCollector(since_minutes=5, browser="chrome")
             collector._find_firefox_profile = lambda: None
-            collector._find_chrome_history = lambda: profile / "History"
+            collector._find_chrome_history = lambda browser=None: profile / "History"
             events = collector.collect()
 
         assert events == []
@@ -235,7 +236,7 @@ class TestBrowserCollector:
             ])
             collector = BrowserCollector(since_minutes=5, browser="chrome")
             collector._find_firefox_profile = lambda: None
-            collector._find_chrome_history = lambda: profile / "History"
+            collector._find_chrome_history = lambda browser=None: profile / "History"
             events = collector.collect()
 
         assert len(events) == 1
@@ -282,10 +283,11 @@ class TestBrowserDetection:
             "org.mozilla.firefox.desktop": "firefox",
             "librewolf.desktop": "firefox",
             "google-chrome.desktop": "chrome",
-            "chromium.desktop": "chrome",
-            "microsoft-edge.desktop": "chrome",
-            "brave-browser.desktop": "chrome",
-            "vivaldi-stable.desktop": "chrome",
+            "chromium.desktop": "chromium",
+            "microsoft-edge.desktop": "edge",
+            "brave-browser.desktop": "brave",
+            "vivaldi-stable.desktop": "vivaldi",
+            "opera.desktop": "opera",
             "": None,
             "konqueror.desktop": None,
         }
@@ -296,8 +298,13 @@ class TestBrowserDetection:
         collector = BrowserCollector(browser="chrome")
         collector._detect_default_browser = lambda: "firefox"
         collector._collect_firefox = lambda: ["firefox-event"]
-        collector._collect_chrome = lambda: ["chrome-event"]
+        collector._collect_chrome = lambda browser="chrome": [f"{browser}-event"]
         assert collector.collect() == ["chrome-event"]
+
+    def test_collect_passes_chromium_browser_to_history_lookup(self):
+        collector = BrowserCollector(browser="brave")
+        collector._collect_chrome = lambda browser="chrome": [f"{browser}-event"]
+        assert collector.collect() == ["brave-event"]
 
     def test_choose_browser_prefers_default_over_recency(self):
         collector = BrowserCollector()
@@ -322,7 +329,10 @@ class TestBrowserDetection:
 
             collector = BrowserCollector()
             collector._find_firefox_profile = lambda: firefox_profile
-            collector._find_chrome_history = lambda: chrome_history
+            collector._find_chrome_history_with_browser = lambda: (
+                "chrome",
+                chrome_history,
+            )
 
             os.utime(firefox_profile / "places.sqlite", (1000, 1000))
             os.utime(chrome_history, (2000, 2000))
@@ -334,8 +344,141 @@ class TestBrowserDetection:
     def test_detect_by_recency_none_when_no_browsers(self):
         collector = BrowserCollector()
         collector._find_firefox_profile = lambda: None
-        collector._find_chrome_history = lambda: None
+        collector._find_chrome_history_with_browser = lambda: None
         assert collector._detect_by_recency() is None
+
+    def test_find_chrome_history_restricts_to_requested_browser(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chrome_history = root / "chrome" / "Default" / "History"
+            brave_history = root / "brave" / "Default" / "History"
+            chrome_history.parent.mkdir(parents=True)
+            brave_history.parent.mkdir(parents=True)
+            chrome_history.write_text("chrome")
+            brave_history.write_text("brave")
+            os.utime(chrome_history, (3000, 3000))
+            os.utime(brave_history, (1000, 1000))
+
+            collector = BrowserCollector()
+            collector._chrome_roots_with_browser = lambda browser=None: {
+                "chrome": [("chrome", chrome_history.parent.parent)],
+                "brave": [("brave", brave_history.parent.parent)],
+                None: [
+                    ("chrome", chrome_history.parent.parent),
+                    ("brave", brave_history.parent.parent),
+                ],
+            }[browser]
+
+            assert collector._find_chrome_history("brave") == brave_history
+            assert collector._find_chrome_history("chrome") == chrome_history
+            assert collector._find_chrome_history() == chrome_history
+
+    def test_detect_by_recency_returns_most_recent_chromium_family(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            brave_history = root / "brave" / "Default" / "History"
+            edge_history = root / "edge" / "Default" / "History"
+            brave_history.parent.mkdir(parents=True)
+            edge_history.parent.mkdir(parents=True)
+            brave_history.write_text("brave")
+            edge_history.write_text("edge")
+            os.utime(brave_history, (3000, 3000))
+            os.utime(edge_history, (1000, 1000))
+
+            collector = BrowserCollector()
+            collector._find_firefox_profile = lambda: None
+            collector._chrome_roots_with_browser = lambda browser=None: [
+                ("brave", brave_history.parent.parent),
+                ("edge", edge_history.parent.parent),
+            ]
+
+            assert collector._detect_by_recency() == "brave"
+
+    def test_chrome_roots_includes_common_chromium_family_paths(self, monkeypatch):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            local_app_data = home / "AppData" / "Local"
+            app_data = home / "AppData" / "Roaming"
+            expected_roots = [
+                home / ".config" / "google-chrome",
+                home / ".config" / "microsoft-edge",
+                home / ".config" / "BraveSoftware" / "Brave-Browser",
+                home / ".config" / "vivaldi",
+                home / ".config" / "opera",
+                local_app_data / "Google" / "Chrome" / "User Data",
+                local_app_data / "Microsoft" / "Edge" / "User Data",
+                local_app_data / "BraveSoftware" / "Brave-Browser" / "User Data",
+                local_app_data / "Vivaldi" / "User Data",
+                app_data / "Opera Software" / "Opera Stable",
+            ]
+            for path in expected_roots:
+                path.mkdir(parents=True)
+            monkeypatch.setattr(Path, "home", lambda: home)
+            monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+            monkeypatch.setenv("APPDATA", str(app_data))
+
+            collector = BrowserCollector()
+
+            assert (
+                home / ".config" / "google-chrome"
+                in collector._chrome_roots("chrome")
+            )
+            assert (
+                home / ".config" / "microsoft-edge"
+                in collector._chrome_roots("edge")
+            )
+            assert (
+                home / ".config" / "BraveSoftware" / "Brave-Browser"
+                in collector._chrome_roots("brave")
+            )
+            assert home / ".config" / "vivaldi" in collector._chrome_roots("vivaldi")
+            assert (
+                app_data / "Opera Software" / "Opera Stable"
+                in collector._chrome_roots("opera")
+            )
+
+
+class TestLowSignalUrl:
+    def test_auth_hosts_are_noise(self):
+        assert is_low_signal_url("https://accounts.google.com/o/oauth2/auth?foo=bar")
+        assert is_low_signal_url("https://login.microsoftonline.com/common/oauth2/authorize")
+        assert is_low_signal_url("https://oauth2.googleapis.com/token")
+
+    def test_oauth_path_segments_are_noise(self):
+        assert is_low_signal_url("https://github.com/login/oauth/authorize")
+        assert is_low_signal_url("https://example.com/sso/start")
+
+    def test_content_urls_are_kept(self):
+        assert not is_low_signal_url("https://github.com/foo/bar")
+        assert not is_low_signal_url("https://news.ycombinator.com/item?id=123")
+        assert not is_low_signal_url("https://youtu.be/abc123")
+
+    def test_search_queries_are_kept(self):
+        # SERPs carry user intent in the query string; Hermes decides, not Ambient.
+        assert not is_low_signal_url("https://www.google.com/search?q=react+suspense")
+        assert not is_low_signal_url("https://duckduckgo.com/?q=sqlite+wal")
+
+    def test_login_substring_is_not_dropped(self):
+        # 'login' as a path segment alone is not auth plumbing (e.g. a repo named login).
+        assert not is_low_signal_url("https://github.com/acme/login-service")
+
+    def test_filters_through_collect(self):
+        from datetime import datetime, timezone
+
+        now_us = int(datetime.now(timezone.utc).timestamp() * 1_000_000)
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp) / "test.default"
+            profile.mkdir()
+            _make_firefox_places(profile, [
+                ("https://accounts.google.com/o/oauth2/auth", "Sign in", now_us),
+                ("https://github.com/foo/bar", "Real Page", now_us),
+            ])
+            collector = BrowserCollector(since_minutes=5, browser="firefox")
+            collector._find_firefox_profile = lambda: profile
+            events = collector.collect()
+
+        urls = {e.url for e in events}
+        assert urls == {"https://github.com/foo/bar"}
 
 
 class TestParseWindowTitle:
