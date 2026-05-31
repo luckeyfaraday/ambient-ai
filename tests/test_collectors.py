@@ -176,7 +176,7 @@ class TestBrowserCollector:
     def test_no_profile_returns_empty(self):
         collector = BrowserCollector()
         collector._find_firefox_profile = lambda: None
-        collector._find_chrome_history = lambda: None
+        collector._find_chrome_history = lambda browser=None: None
         assert collector.collect() == []
 
     def test_chrome_youtube_tagged(self):
@@ -373,6 +373,17 @@ class TestBrowserDetection:
             assert collector._find_chrome_history("chrome") == chrome_history
             assert collector._find_chrome_history() == chrome_history
 
+    def test_find_chrome_history_supports_direct_history_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            history = root / "History"
+            history.write_text("opera")
+
+            collector = BrowserCollector()
+            collector._chrome_roots_with_browser = lambda browser=None: [("opera", root)]
+
+            assert collector._find_chrome_history("opera") == history
+
     def test_detect_by_recency_returns_most_recent_chromium_family(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -446,7 +457,7 @@ class TestLowSignalUrl:
 
     def test_oauth_path_segments_are_noise(self):
         assert is_low_signal_url("https://github.com/login/oauth/authorize")
-        assert is_low_signal_url("https://example.com/sso/start")
+        assert is_low_signal_url("https://auth.example.com/sso/start")
 
     def test_content_urls_are_kept(self):
         assert not is_low_signal_url("https://github.com/foo/bar")
@@ -461,6 +472,10 @@ class TestLowSignalUrl:
     def test_login_substring_is_not_dropped(self):
         # 'login' as a path segment alone is not auth plumbing (e.g. a repo named login).
         assert not is_low_signal_url("https://github.com/acme/login-service")
+
+    def test_sso_content_on_normal_hosts_is_kept(self):
+        assert not is_low_signal_url("https://github.com/acme/sso")
+        assert not is_low_signal_url("https://docs.example.com/oauth/setup")
 
     def test_filters_through_collect(self):
         from datetime import datetime, timezone

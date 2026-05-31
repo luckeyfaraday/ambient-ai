@@ -35,6 +35,7 @@ _NOISE_HOST_SUFFIXES = (
     "login.live.com",
     "oauth2.googleapis.com",
 )
+_NOISE_HOST_KEYWORDS = ("auth", "login", "oauth", "sso")
 _NOISE_PATH_SEGMENTS = frozenset({"oauth", "oauth2", "sso"})
 _SECRET_ENV_PATTERN = re.compile(
     r"(?i)\b([A-Z0-9_]*(?:TOKEN|API_KEY|SECRET|PASSWORD|PASSWD|PRIVATE_KEY)[A-Z0-9_]*)=([^\s]+)"
@@ -269,7 +270,7 @@ class BrowserCollector(Collector):
         return [
             (root_browser, path)
             for root_browser, root in self._chrome_roots_with_browser(browser)
-            for path in root.glob("*/History")
+            for path in [root / "History", *root.glob("*/History")]
             if path.exists()
         ]
 
@@ -356,7 +357,9 @@ def is_low_signal_url(url: str) -> bool:
     if any(host == suffix or host.endswith("." + suffix) for suffix in _NOISE_HOST_SUFFIXES):
         return True
     segments = {seg for seg in parts.path.lower().split("/") if seg}
-    return bool(segments & _NOISE_PATH_SEGMENTS)
+    if not segments & _NOISE_PATH_SEGMENTS:
+        return False
+    return any(keyword in host for keyword in _NOISE_HOST_KEYWORDS) or "login" in segments
 
 
 def copy_sqlite_database(source: Path, destination: Path) -> Path:
