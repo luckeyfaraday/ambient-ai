@@ -50,6 +50,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     expire = subparsers.add_parser("expire")
     expire.add_argument("--days", type=int, default=7, help="Remove events older than this many days.")
+    record = subparsers.add_parser("record-outcome")
+    record.add_argument("decision", help="no_action | done | blocked | handoff")
+    record.add_argument("--summary", default="")
+    record.add_argument("--agent", default="unknown")
+    record.add_argument("--evidence", action="append", default=[], help="Evidence ref; may be repeated.")
+    show_outcomes = subparsers.add_parser("show-outcomes")
+    show_outcomes.add_argument("--limit", type=int, default=20)
+    subparsers.add_parser("mcp", help="Serve Ambient context over MCP (stdio).")
     subparsers.add_parser("smoke")
     args = parser.parse_args(argv)
 
@@ -113,6 +121,35 @@ def main(argv: list[str] | None = None) -> int:
         store.init()
         removed = store.expire(max_age_days=args.days)
         print(f"Expired {removed} events older than {args.days} days")
+        return 0
+    if args.command == "record-outcome":
+        from .outcomes import Outcome, append_outcome
+
+        record = append_outcome(
+            paths,
+            Outcome(
+                decision=args.decision,
+                summary=args.summary,
+                agent=args.agent,
+                evidence=args.evidence,
+            ),
+        )
+        print(f"Recorded outcome '{record.decision}' at {record.recorded_at}")
+        return 0
+    if args.command == "show-outcomes":
+        from .outcomes import read_outcomes
+
+        records = read_outcomes(paths, limit=args.limit)
+        if not records:
+            print("No outcomes recorded yet")
+            return 0
+        for rec in records:
+            print(f"[{rec.get('recorded_at')}] {rec.get('agent')} {rec.get('decision')}: {rec.get('summary')}")
+        return 0
+    if args.command == "mcp":
+        from .mcp_server import serve
+
+        serve(paths)
         return 0
     if args.command == "smoke":
         paths.ensure()
